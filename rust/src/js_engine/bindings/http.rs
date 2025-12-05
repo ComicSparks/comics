@@ -1,6 +1,5 @@
-use rquickjs::{Ctx, Function, Object, Value};
+use rquickjs::{Ctx, Function, Value};
 use anyhow::Result;
-use std::collections::HashMap;
 
 use crate::http::{HttpClient, HttpRequest};
 
@@ -8,53 +7,102 @@ use crate::http::{HttpClient, HttpRequest};
 pub fn register(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();
     
-    let http = Object::new(ctx.clone())?;
-    
-    // http.get(url, headers?) -> Promise<Response>
-    // 由于 rquickjs 异步处理较复杂，这里使用同步版本
-    // 实际使用中会通过 Rust 端异步调用，然后返回结果给 JS
-    
-    // 注册一个标记，表示 http 模块可用
-    http.set("_available", true)?;
-    
-    // http.request(config) - 返回请求配置的 JSON，由 Rust 端执行
-    http.set("_request", Function::new(ctx.clone(), |config: String| -> String {
-        // 这个函数只是记录请求，实际执行由 Rust 端处理
-        config
+    // 注册同步的 HTTP 请求函数
+    // 这个函数会阻塞等待 HTTP 请求完成
+    globals.set("__native_http_request_sync__", Function::new(ctx.clone(), |config_json: String| -> String {
+        tracing::info!("[JS HTTP] Received request: {}", &config_json[..config_json.len().min(200)]);
+        
+        // 解析请求配置
+        let request: HttpRequest = match serde_json::from_str(&config_json) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("[JS HTTP] Failed to parse request: {}", e);
+                return serde_json::to_string(&serde_json::json!({
+                    "error": format!("Failed to parse request: {}", e)
+                })).unwrap_or_default();
+            }
+        };
+        
+        tracing::info!("[JS HTTP] Making {} request to: {}", request.method, request.url);
+        
+        // 使用 tokio 的阻塞线程执行异步请求
+        // 注意：这会阻塞当前线程，但 QuickJS 是单线程的所以没问题
+        let result = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let client = HttpClient::new()?;
+                client.request(request).await
+            })
+        }).join();
+        
+        match result {
+            Ok(Ok(response)) => {
+                tracing::info!("[JS HTTP] Response status: {}", response.status);
+                serde_json::to_string(&response).unwrap_or_else(|e| {
+                    serde_json::to_string(&serde_json::json!({
+                        "error": format!("Failed to serialize response: {}", e)
+                    })).unwrap_or_default()
+                })
+            }
+            Ok(Err(e)) => {
+                tracing::error!("[JS HTTP] Request failed: {}", e);
+                serde_json::to_string(&serde_json::json!({
+                    "error": format!("Request failed: {}", e)
+                })).unwrap_or_default()
+            }
+            Err(_) => {
+                tracing::error!("[JS HTTP] Thread panicked");
+                serde_json::to_string(&serde_json::json!({
+                    "error": "HTTP request thread panicked"
+                })).unwrap_or_default()
+            }
+        }
     })?)?;
     
-    globals.set("__http__", http)?;
-    
-    // 注册辅助函数用于构建请求
+    // 注册辅助 JS 代码
+    // 提供 http.get/post/request 接口
     let http_helper = r#"
         const http = {
-            async get(url, headers = {}) {
-                return await __native_http_request__({
+            get: function(url, headers) {
+                headers = headers || {};
+                var config = JSON.stringify({
                     url: url,
                     method: 'GET',
-                    headers: headers
+                    headers: headers,
+                    timeout_secs: 30
                 });
+                var responseJson = __native_http_request_sync__(config);
+                return JSON.parse(responseJson);
             },
-            async post(url, headers = {}, body = null) {
-                return await __native_http_request__({
+            post: function(url, headers, body) {
+                headers = headers || {};
+                var config = JSON.stringify({
                     url: url,
                     method: 'POST',
                     headers: headers,
-                    body: body
+                    body: body || null,
+                    timeout_secs: 30
                 });
+                var responseJson = __native_http_request_sync__(config);
+                return JSON.parse(responseJson);
             },
-            async request(config) {
-                return await __native_http_request__(config);
+            request: function(config) {
+                config.timeout_secs = config.timeout_secs || 30;
+                var configJson = JSON.stringify(config);
+                var responseJson = __native_http_request_sync__(configJson);
+                return JSON.parse(responseJson);
             }
         };
     "#;
     
     let _: Value = ctx.eval(http_helper)?;
     
+    tracing::info!("[JS HTTP] HTTP bindings registered");
+    
     Ok(())
 }
 
-/// 执行 HTTP 请求（供 Rust 端调用）
+/// 执行 HTTP 请求（供 Rust 端调用）- 保留用于其他用途
 pub async fn execute_http_request(config_json: &str) -> Result<String> {
     let request: HttpRequest = serde_json::from_str(config_json)?;
     let client = HttpClient::new()?;

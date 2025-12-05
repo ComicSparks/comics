@@ -1,4 +1,4 @@
-use rquickjs::{Context, Runtime, Function, Object, Value, IntoJs, FromJs};
+use rquickjs::{Context, Runtime, Function, Object, Value, FromJs, IntoJs, Promise};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use anyhow::Result;
@@ -116,22 +116,78 @@ impl JsRuntime {
     }
 
     /// 调用模块中的函数，返回 JSON 字符串
+    /// 支持同步函数和 async 函数（返回 Promise）
     pub fn call_function_json(&self, func_name: &str, args_json: &str) -> Result<String> {
+        tracing::info!("call_function_json START: func={}", func_name);
+        
         self.context.with(|ctx| {
+            tracing::info!("Inside context.with");
             let globals = ctx.globals();
-            let func: Function = globals.get(func_name)?;
+            tracing::info!("Got globals");
+            
+            let func: Function = match globals.get(func_name) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::error!("Failed to get function {}: {:?}", func_name, e);
+                    return Err(anyhow::anyhow!("Function not found: {}", func_name));
+                }
+            };
+            
+            tracing::info!("Got function: {}", func_name);
             
             // 解析 JSON 参数
             let json: Object = globals.get("JSON")?;
             let parse: Function = json.get("parse")?;
             let args: Value = parse.call((args_json,))?;
             
+            tracing::info!("Parsed args, calling function...");
+            
             // 调用函数
             let result: Value = func.call((args,))?;
+            tracing::info!("Function called, result type: {:?}", result.type_of());
+            
+            // 检查是否是 Promise
+            let final_value: Value = if result.is_promise() {
+                tracing::info!("Result is a Promise, waiting for resolution...");
+                
+                // 使用 Promise::from_value 转换
+                let promise = Promise::from_value(result)?;
+                
+                // 使用 finish() 方法等待 Promise 完成
+                // finish() 会运行 QuickJS job queue 直到 Promise resolve 或 reject
+                match promise.finish::<Value>() {
+                    Ok(resolved_value) => {
+                        tracing::info!("Promise resolved, value type: {:?}", resolved_value.type_of());
+                        resolved_value
+                    }
+                    Err(rquickjs::Error::WouldBlock) => {
+                        // Promise 需要等待外部操作，无法立即完成
+                        tracing::warn!("Promise would block - async operation pending");
+                        // 返回 null 表示无法完成
+                        ctx.eval("null")?
+                    }
+                    Err(rquickjs::Error::Exception) => {
+                        tracing::error!("Promise rejected with exception");
+                        // 尝试获取异常信息
+                        let exc = ctx.catch();
+                        let error_msg = format!("{:?}", exc);
+                        return Err(anyhow::anyhow!("JS Promise Error: {}", error_msg));
+                    }
+                    Err(e) => {
+                        tracing::error!("Promise rejected: {:?}", e);
+                        return Err(anyhow::anyhow!("JS Promise Error: {:?}", e));
+                    }
+                }
+            } else {
+                tracing::info!("Result is not a Promise, using directly");
+                result
+            };
             
             // 序列化结果
             let stringify: Function = json.get("stringify")?;
-            let json_str: String = stringify.call((result,))?;
+            let json_str: String = stringify.call((final_value,))?;
+            
+            tracing::info!("Serialized result: {} bytes", json_str.len());
             
             Ok(json_str)
         })

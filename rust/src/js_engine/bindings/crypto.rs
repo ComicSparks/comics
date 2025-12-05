@@ -46,7 +46,9 @@ pub fn register(ctx: &Ctx<'_>) -> Result<()> {
             .unwrap_or_default()
     })?)?;
     
-    globals.set("crypto", crypto_obj)?;
+    globals.set("__crypto__", crypto_obj)?;
+    
+    tracing::info!("[JS Crypto] Crypto bindings registered");
     
     Ok(())
 }

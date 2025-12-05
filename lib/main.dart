@@ -5,13 +5,7 @@ import 'package:comics/src/rust/api/init.dart';
 import 'package:comics/src/rust/api/module_api.dart';
 import 'package:comics/src/rust/modules/types.dart';
 import 'package:comics/src/rust/frb_generated.dart';
-
-/// 从 RemoteImageInfo 获取完整图片 URL
-String? getImageUrl(RemoteImageInfo? info) {
-  if (info == null) return null;
-  if (info.fileServer.isEmpty) return info.path;
-  return '${info.fileServer}${info.path}';
-}
+import 'package:comics/screens/comics_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -349,17 +343,25 @@ class _ModuleScreenState extends State<ModuleScreen> {
         _error = null;
       });
       
+      debugPrint('[ModuleScreen] Loading module: ${widget.module.id}');
+      
       // 加载模块
       await loadModule(moduleId: widget.module.id);
       
+      debugPrint('[ModuleScreen] Module loaded, getting categories...');
+      
       // 获取分类
       final categories = await getCategories(moduleId: widget.module.id);
+      
+      debugPrint('[ModuleScreen] Got ${categories.length} categories');
       
       setState(() {
         _categories = categories;
         _loading = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[ModuleScreen] Error: $e');
+      debugPrint('[ModuleScreen] StackTrace: $stackTrace');
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -438,7 +440,7 @@ class _ModuleScreenState extends State<ModuleScreen> {
                 if (category.thumb != null)
                   Expanded(
                     child: Image.network(
-                      getImageUrl(category.thumb)!,
+                      getImageUrl(category.thumb!),
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => const Icon(Icons.image, size: 40),
                     ),
@@ -463,9 +465,15 @@ class _ModuleScreenState extends State<ModuleScreen> {
   }
 
   void _openCategory(Category category) {
-    // TODO: 打开分类漫画列表页面
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('打开分类: ${category.title}')),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ComicsScreen(
+          moduleId: widget.module.id,
+          moduleName: widget.module.name,
+          categorySlug: category.id,
+          categoryTitle: category.title,
+        ),
+      ),
     );
   }
 }

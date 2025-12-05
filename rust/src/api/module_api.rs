@@ -54,9 +54,12 @@ pub async fn register_module(module_id: String) -> anyhow::Result<ModuleInfo> {
 /// 加载模块
 #[frb]
 pub async fn load_module(module_id: String) -> anyhow::Result<()> {
+    tracing::info!("[API] load_module: {}", module_id);
     let manager = get_module_manager()?;
     let m = manager.read().await;
-    m.load_module(&module_id).await
+    let result = m.load_module(&module_id).await;
+    tracing::info!("[API] load_module result: {:?}", result.is_ok());
+    result
 }
 
 /// 卸载模块
@@ -78,9 +81,12 @@ pub async fn set_module_enabled(module_id: String, enabled: bool) -> anyhow::Res
 /// 获取模块的分类列表
 #[frb]
 pub async fn get_categories(module_id: String) -> anyhow::Result<Vec<Category>> {
+    tracing::info!("[API] get_categories: {}", module_id);
     let manager = get_module_manager()?;
     let m = manager.read().await;
-    m.get_categories(&module_id).await
+    let result = m.get_categories(&module_id).await;
+    tracing::info!("[API] get_categories result: {:?}", result.as_ref().map(|v| v.len()));
+    result
 }
 
 /// 获取排序选项
