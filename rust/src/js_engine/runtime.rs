@@ -75,10 +75,29 @@ impl JsRuntime {
             let globals = ctx.globals();
             globals.set("__MODULE_ID__", module_id)?;
             
-            // 执行脚本
-            let _: Value = ctx.eval(script)?;
-            
-            Ok(())
+            // 执行脚本，捕获详细错误信息
+            match ctx.eval::<Value, _>(script) {
+                Ok(_) => Ok(()),
+                Err(rquickjs::Error::Exception) => {
+                    // 获取异常详情
+                    let exception: Value = ctx.catch();
+                    let error_msg = if let Some(err_obj) = exception.as_object() {
+                        let message: String = err_obj.get("message").unwrap_or_default();
+                        let stack: String = err_obj.get("stack").unwrap_or_default();
+                        format!("JS Error: {}\nStack: {}", message, stack)
+                    } else if let Some(err_str) = exception.as_string() {
+                        format!("JS Error: {}", err_str.to_string().unwrap_or_default())
+                    } else {
+                        "Unknown JS exception".to_string()
+                    };
+                    tracing::error!("[JS Runtime] Module load error: {}", error_msg);
+                    Err(anyhow::anyhow!(error_msg))
+                }
+                Err(e) => {
+                    tracing::error!("[JS Runtime] Module load error: {:?}", e);
+                    Err(anyhow::anyhow!("JS error: {:?}", e))
+                }
+            }
         })
     }
 

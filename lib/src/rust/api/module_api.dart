@@ -115,3 +115,32 @@ Future<String> callModuleFunction({
   funcName: funcName,
   argsJson: argsJson,
 );
+
+/// 获取模块存储的值
+Future<String?> getModuleStorage({
+  required String moduleId,
+  required String key,
+}) => RustLib.instance.api.crateApiModuleApiGetModuleStorage(
+  moduleId: moduleId,
+  key: key,
+);
+
+/// 设置模块存储的值
+Future<void> setModuleStorage({
+  required String moduleId,
+  required String key,
+  required String value,
+}) => RustLib.instance.api.crateApiModuleApiSetModuleStorage(
+  moduleId: moduleId,
+  key: key,
+  value: value,
+);
+
+/// 删除模块存储的值
+Future<void> removeModuleStorage({
+  required String moduleId,
+  required String key,
+}) => RustLib.instance.api.crateApiModuleApiRemoveModuleStorage(
+  moduleId: moduleId,
+  key: key,
+);

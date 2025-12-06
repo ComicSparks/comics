@@ -46,6 +46,18 @@ pub fn register(ctx: &Ctx<'_>) -> Result<()> {
             .unwrap_or_default()
     })?)?;
     
+    // crypto.aesEcbDecrypt(base64Data, key) -> string
+    // key 应该是 32 字节的字符串（通常是十六进制 MD5 结果）
+    crypto_obj.set("aesEcbDecrypt", Function::new(ctx.clone(), |data: String, key: String| -> String {
+        match crypto::aes_ecb_decrypt_base64(&data, &key) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("[JS Crypto] AES decrypt error: {}", e);
+                String::new()
+            }
+        }
+    })?)?;
+    
     globals.set("__crypto__", crypto_obj)?;
     
     tracing::info!("[JS Crypto] Crypto bindings registered");

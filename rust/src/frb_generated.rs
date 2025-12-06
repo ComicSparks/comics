@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1611238438;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1542618662;
 
 // Section: executor
 
@@ -626,6 +626,45 @@ fn wire__crate__api__module_api__get_eps_impl(
                     (move || async move {
                         let output_ok =
                             crate::api::module_api::get_eps(api_module_id, api_comic_id, api_page)
+                                .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__module_api__get_module_storage_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_module_storage",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_module_id = <String>::sse_decode(&mut deserializer);
+            let api_key = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::module_api::get_module_storage(api_module_id, api_key)
                                 .await?;
                         Ok(output_ok)
                     })()
@@ -1328,6 +1367,45 @@ fn wire__crate__api__module_api__register_module_impl(
         },
     )
 }
+fn wire__crate__api__module_api__remove_module_storage_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "remove_module_storage",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_module_id = <String>::sse_decode(&mut deserializer);
+            let api_key = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::module_api::remove_module_storage(api_module_id, api_key)
+                                .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__property_api__save_property_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1482,6 +1560,49 @@ fn wire__crate__api__module_api__set_module_enabled_impl(
                         let output_ok =
                             crate::api::module_api::set_module_enabled(api_module_id, api_enabled)
                                 .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__module_api__set_module_storage_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_module_storage",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_module_id = <String>::sse_decode(&mut deserializer);
+            let api_key = <String>::sse_decode(&mut deserializer);
+            let api_value = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, flutter_rust_bridge::for_generated::anyhow::Error>(
+                    (move || async move {
+                        let output_ok = crate::api::module_api::set_module_storage(
+                            api_module_id,
+                            api_key,
+                            api_value,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,
@@ -2038,42 +2159,54 @@ fn pde_ffi_dispatcher_primary_impl(
         }
         16 => wire__crate__api__module_api__get_comics_impl(port, ptr, rust_vec_len, data_len),
         17 => wire__crate__api__module_api__get_eps_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__module_api__get_modules_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__module_api__get_pictures_impl(port, ptr, rust_vec_len, data_len),
-        22 => {
+        18 => {
+            wire__crate__api__module_api__get_module_storage_impl(port, ptr, rust_vec_len, data_len)
+        }
+        19 => wire__crate__api__module_api__get_modules_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__module_api__get_pictures_impl(port, ptr, rust_vec_len, data_len),
+        23 => {
             wire__crate__api__module_api__get_sort_options_impl(port, ptr, rust_vec_len, data_len)
         }
-        24 => wire__crate__api__http_api__http_download_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__http_api__http_get_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__http_api__http_post_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__http_api__http_request_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__init__init_application_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__init__init_frb_impl(port, ptr, rust_vec_len, data_len),
-        32 => {
+        25 => wire__crate__api__http_api__http_download_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__http_api__http_get_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__http_api__http_post_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__http_api__http_request_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__init__init_application_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__init__init_frb_impl(port, ptr, rust_vec_len, data_len),
+        33 => {
             wire__crate__api__property_api__list_properties_impl(port, ptr, rust_vec_len, data_len)
         }
-        33 => wire__crate__api__property_api__list_properties_by_prefix_impl(
+        34 => wire__crate__api__property_api__list_properties_by_prefix_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => wire__crate__api__module_api__load_module_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__property_api__load_property_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__module_api__register_module_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__property_api__save_property_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__module_api__scan_and_register_modules_impl(
+        35 => wire__crate__api__module_api__load_module_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__property_api__load_property_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__module_api__register_module_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__module_api__remove_module_storage_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        39 => wire__crate__api__module_api__search_comics_impl(port, ptr, rust_vec_len, data_len),
-        40 => {
+        39 => wire__crate__api__property_api__save_property_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__module_api__scan_and_register_modules_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        41 => wire__crate__api__module_api__search_comics_impl(port, ptr, rust_vec_len, data_len),
+        42 => {
             wire__crate__api__module_api__set_module_enabled_impl(port, ptr, rust_vec_len, data_len)
         }
-        41 => wire__crate__api__module_api__unload_module_impl(port, ptr, rust_vec_len, data_len),
+        43 => {
+            wire__crate__api__module_api__set_module_storage_impl(port, ptr, rust_vec_len, data_len)
+        }
+        44 => wire__crate__api__module_api__unload_module_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2096,10 +2229,10 @@ fn pde_ffi_dispatcher_sync_impl(
         10 => wire__crate__api__crypto_api__crypto_sha256_bytes_impl(ptr, rust_vec_len, data_len),
         11 => wire__crate__api__crypto_api__crypto_sha512_impl(ptr, rust_vec_len, data_len),
         13 => wire__crate__api__init__get_cache_dir_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__init__get_modules_dir_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__init__get_root_path_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__init__is_initialized_impl(ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__init__get_modules_dir_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__init__get_root_path_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__init__is_initialized_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

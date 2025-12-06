@@ -1,5 +1,7 @@
 use sha2::{Sha256, Sha512, Digest as ShaDigest};
 use base64::{Engine as _, engine::general_purpose};
+use aes::Aes256;
+use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};
 
 /// 计算 MD5 哈希
 pub fn md5_hash(data: &[u8]) -> String {
@@ -103,4 +105,53 @@ mod tests {
         let decoded = hex_decode(&encoded).unwrap();
         assert_eq!(decoded, b"hello");
     }
+}
+
+/// AES-256-ECB 解密
+/// key 必须是 32 字节（256位）
+pub fn aes_ecb_decrypt(data: &[u8], key: &[u8]) -> anyhow::Result<Vec<u8>> {
+    if key.len() != 32 {
+        return Err(anyhow::anyhow!("AES-256 requires 32 byte key, got {}", key.len()));
+    }
+    
+    if data.len() % 16 != 0 {
+        return Err(anyhow::anyhow!("Data length must be multiple of 16 bytes"));
+    }
+    
+    let key_arr = GenericArray::from_slice(key);
+    let cipher = Aes256::new(key_arr);
+    
+    let mut result = Vec::with_capacity(data.len());
+    
+    // 按 16 字节块解密
+    for chunk in data.chunks(16) {
+        let mut block = GenericArray::clone_from_slice(chunk);
+        cipher.decrypt_block(&mut block);
+        result.extend_from_slice(&block);
+    }
+    
+    // 移除 PKCS7 填充
+    if let Some(&pad_len) = result.last() {
+        let pad_len = pad_len as usize;
+        if pad_len > 0 && pad_len <= 16 && result.len() >= pad_len {
+            // 验证填充
+            let valid_padding = result[result.len() - pad_len..]
+                .iter()
+                .all(|&b| b as usize == pad_len);
+            if valid_padding {
+                result.truncate(result.len() - pad_len);
+            }
+        }
+    }
+    
+    Ok(result)
+}
+
+/// AES-256-ECB 解密（Base64 编码输入，返回字符串）
+pub fn aes_ecb_decrypt_base64(data: &str, key: &str) -> anyhow::Result<String> {
+    let encrypted = base64_decode(data)?;
+    let key_bytes = key.as_bytes();
+    let decrypted = aes_ecb_decrypt(&encrypted, key_bytes)?;
+    String::from_utf8(decrypted)
+        .map_err(|e| anyhow::anyhow!("UTF-8 decode error: {}", e))
 }

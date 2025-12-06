@@ -2,6 +2,7 @@ pub mod http;
 pub mod crypto;
 pub mod storage;
 pub mod console;
+pub mod html;
 
 use rquickjs::{Ctx, Value};
 use anyhow::Result;
@@ -12,6 +13,7 @@ pub fn register_all(ctx: &Ctx<'_>) -> Result<()> {
     http::register(ctx)?;
     crypto::register(ctx)?;
     storage::register(ctx)?;
+    html::register(ctx)?;
     
     // 创建 runtime 对象，作为模块的标准接口
     // 模块脚本使用 runtime.http.get, runtime.storage.get 等
@@ -20,7 +22,8 @@ pub fn register_all(ctx: &Ctx<'_>) -> Result<()> {
             http: http,
             storage: storage,
             crypto: __crypto__,
-            console: console
+            console: console,
+            html: __html__
         };
     "#;
     

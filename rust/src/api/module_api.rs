@@ -159,3 +159,82 @@ pub async fn call_module_function(module_id: String, func_name: String, args_jso
     let m = manager.read().await;
     m.call_function(&module_id, &func_name, &args_json).await
 }
+
+// ============ Storage API ============
+
+use crate::database;
+use crate::database::entities::property;
+use sea_orm::{EntityTrait, Set, ActiveModelTrait};
+use chrono::Utc;
+
+/// 获取模块存储的值
+#[frb]
+pub async fn get_module_storage(module_id: String, key: String) -> anyhow::Result<Option<String>> {
+    let db = database::get_database()
+        .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
+    let conn = db.read().await;
+    let id = property::Model::create_id(&module_id, &key);
+    
+    let result = property::Entity::find_by_id(&id)
+        .one(&*conn)
+        .await?
+        .map(|m| m.value);
+    
+    Ok(result)
+}
+
+/// 设置模块存储的值
+#[frb]
+pub async fn set_module_storage(module_id: String, key: String, value: String) -> anyhow::Result<()> {
+    let db = database::get_database()
+        .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
+    let conn = db.read().await;
+    let id = property::Model::create_id(&module_id, &key);
+    let now = Utc::now().naive_utc();
+    
+    // 先尝试找到现有记录
+    let existing = property::Entity::find_by_id(&id)
+        .one(&*conn)
+        .await?;
+    
+    if existing.is_some() {
+        // 更新
+        let active = property::ActiveModel {
+            id: Set(id),
+            module_id: Set(module_id),
+            key: Set(key),
+            value: Set(value),
+            created_at: sea_orm::ActiveValue::NotSet,
+            updated_at: Set(now),
+        };
+        active.update(&*conn).await?;
+    } else {
+        // 插入
+        let active = property::ActiveModel {
+            id: Set(id),
+            module_id: Set(module_id),
+            key: Set(key),
+            value: Set(value),
+            created_at: Set(now),
+            updated_at: Set(now),
+        };
+        active.insert(&*conn).await?;
+    }
+    
+    Ok(())
+}
+
+/// 删除模块存储的值
+#[frb]
+pub async fn remove_module_storage(module_id: String, key: String) -> anyhow::Result<()> {
+    let db = database::get_database()
+        .ok_or_else(|| anyhow::anyhow!("Database not initialized"))?;
+    let conn = db.read().await;
+    let id = property::Model::create_id(&module_id, &key);
+    
+    property::Entity::delete_by_id(&id)
+        .exec(&*conn)
+        .await?;
+    
+    Ok(())
+}

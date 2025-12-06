@@ -5,7 +5,13 @@ import 'package:comics/src/rust/api/init.dart';
 import 'package:comics/src/rust/api/module_api.dart';
 import 'package:comics/src/rust/modules/types.dart';
 import 'package:comics/src/rust/frb_generated.dart';
-import 'package:comics/screens/comics_screen.dart';
+import 'package:comics/screens/comic_info_screen.dart';
+
+/// 从 RemoteImageInfo 获取完整图片 URL
+String getImageUrl(RemoteImageInfo info) {
+  if (info.fileServer.isEmpty) return info.path;
+  return '${info.fileServer}${info.path}';
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -327,6 +333,7 @@ class ModuleScreen extends StatefulWidget {
 
 class _ModuleScreenState extends State<ModuleScreen> {
   List<Category> _categories = [];
+  Category? _selectedCategory;
   bool _loading = true;
   String? _error;
 
@@ -357,6 +364,10 @@ class _ModuleScreenState extends State<ModuleScreen> {
       
       setState(() {
         _categories = categories;
+        // 默认选中第一个分类
+        if (categories.isNotEmpty) {
+          _selectedCategory = categories.first;
+        }
         _loading = false;
       });
     } catch (e, stackTrace) {
@@ -369,11 +380,87 @@ class _ModuleScreenState extends State<ModuleScreen> {
     }
   }
 
+  void _showCategoryPicker() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.6,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Text('选择分类', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _categories.length,
+                itemBuilder: (context, index) {
+                  final cat = _categories[index];
+                  final isSelected = _selectedCategory?.id == cat.id;
+                  return ListTile(
+                    leading: isSelected 
+                        ? const Icon(Icons.check, color: Colors.deepPurple)
+                        : const SizedBox(width: 24),
+                    title: Text(cat.title),
+                    selected: isSelected,
+                    onTap: () {
+                      setState(() => _selectedCategory = cat);
+                      Navigator.pop(context);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ModuleSettingsScreen(module: widget.module),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.module.name),
+        actions: [
+          // 分类选择器
+          if (_categories.isNotEmpty)
+            TextButton.icon(
+              onPressed: _showCategoryPicker,
+              icon: const Icon(Icons.category, size: 20),
+              label: Text(
+                _selectedCategory?.title ?? '选择分类',
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+          // 设置按钮
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: '模块设置',
+            onPressed: _openSettings,
+          ),
+        ],
       ),
       body: _buildBody(),
     );
@@ -419,62 +506,19 @@ class _ModuleScreenState extends State<ModuleScreen> {
         child: Text('暂无分类'),
       );
     }
-    
-    return GridView.builder(
-      padding: const EdgeInsets.all(10),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 1,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-      ),
-      itemCount: _categories.length,
-      itemBuilder: (context, index) {
-        final category = _categories[index];
-        return Card(
-          child: InkWell(
-            onTap: () => _openCategory(category),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (category.thumb != null)
-                  Expanded(
-                    child: Image.network(
-                      getImageUrl(category.thumb!),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Icon(Icons.image, size: 40),
-                    ),
-                  )
-                else
-                  const Icon(Icons.folder, size: 40),
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(
-                    category.title,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 
-  void _openCategory(Category category) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ComicsScreen(
-          moduleId: widget.module.id,
-          moduleName: widget.module.name,
-          categorySlug: category.id,
-          categoryTitle: category.title,
-        ),
-      ),
-    );
+    // 直接显示当前选中分类的漫画列表
+    if (_selectedCategory != null) {
+      return ComicsView(
+        key: ValueKey(_selectedCategory!.id),
+        moduleId: widget.module.id,
+        moduleName: widget.module.name,
+        categorySlug: _selectedCategory!.id,
+        categoryTitle: _selectedCategory!.title,
+      );
+    }
+    
+    return const Center(child: Text('请选择分类'));
   }
 }
 
@@ -534,6 +578,689 @@ class SettingsScreen extends StatelessWidget {
               );
             },
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 漫画列表视图（可嵌入到其他页面）
+class ComicsView extends StatefulWidget {
+  final String moduleId;
+  final String moduleName;
+  final String categorySlug;
+  final String categoryTitle;
+
+  const ComicsView({
+    super.key,
+    required this.moduleId,
+    required this.moduleName,
+    required this.categorySlug,
+    required this.categoryTitle,
+  });
+
+  @override
+  State<ComicsView> createState() => _ComicsViewState();
+}
+
+class _ComicsViewState extends State<ComicsView> {
+  final List<ComicSimple> _comics = [];
+  final ScrollController _scrollController = ScrollController();
+  
+  List<SortOption> _sortOptions = [];
+  String _currentSort = '';
+  int _currentPage = 1;
+  int _totalPages = 1;
+  bool _loading = false;
+  bool _hasMore = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    _loadSortOptions();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      _loadMore();
+    }
+  }
+
+  Future<void> _loadSortOptions() async {
+    try {
+      final options = await getSortOptions(moduleId: widget.moduleId);
+      setState(() {
+        _sortOptions = options;
+        _currentSort = options.isNotEmpty ? options.first.value : '';
+      });
+      _loadComics();
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _loadComics({bool refresh = false}) async {
+    if (_loading) return;
+
+    setState(() {
+      _loading = true;
+      _error = null;
+      if (refresh) {
+        _comics.clear();
+        _currentPage = 1;
+        _hasMore = true;
+      }
+    });
+
+    try {
+      final result = await getComics(
+        moduleId: widget.moduleId,
+        categorySlug: widget.categorySlug,
+        sortBy: _currentSort,
+        page: _currentPage,
+      );
+
+      setState(() {
+        _comics.addAll(result.docs);
+        _totalPages = result.pageInfo.pages;
+        _hasMore = _currentPage < _totalPages;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loading || !_hasMore) return;
+    _currentPage++;
+    await _loadComics();
+  }
+
+  Future<void> _refresh() async {
+    await _loadComics(refresh: true);
+  }
+
+  void _changeSort(String sortId) {
+    if (_currentSort == sortId) return;
+    setState(() {
+      _currentSort = sortId;
+    });
+    _loadComics(refresh: true);
+  }
+
+  void _openComic(ComicSimple comic) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ComicInfoScreen(
+          moduleId: widget.moduleId,
+          moduleName: widget.moduleName,
+          comicId: comic.id,
+          comicTitle: comic.title,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null && _comics.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 60, color: Colors.red),
+            const SizedBox(height: 16),
+            Text('加载失败', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                _error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.grey),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _refresh,
+              child: const Text('重试'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_comics.isEmpty && _loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_comics.isEmpty) {
+      return const Center(child: Text('暂无漫画'));
+    }
+
+    return Column(
+      children: [
+        // 排序和刷新按钮
+        if (_sortOptions.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                Text('排序:', style: TextStyle(color: Colors.grey[600])),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: _sortOptions.map((option) {
+                        final isSelected = _currentSort == option.value;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(option.name),
+                            selected: isSelected,
+                            onSelected: (_) => _changeSort(option.value),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _refresh,
+                  tooltip: '刷新',
+                ),
+              ],
+            ),
+          ),
+        // 漫画列表
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            child: GridView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.all(8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                childAspectRatio: 0.65,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+              ),
+              itemCount: _comics.length + (_hasMore ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index >= _comics.length) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: CircularProgressIndicator(),
+                    ),
+                  );
+                }
+                return _ComicCard(
+                  comic: _comics[index],
+                  onTap: () => _openComic(_comics[index]),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 漫画卡片
+class _ComicCard extends StatelessWidget {
+  final ComicSimple comic;
+  final VoidCallback onTap;
+
+  const _ComicCard({
+    required this.comic,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbUrl = getImageUrl(comic.thumb);
+    
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    thumbUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: Colors.grey[200],
+                      child: const Icon(Icons.broken_image, size: 40),
+                    ),
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Container(
+                        color: Colors.grey[200],
+                        child: const Center(
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      );
+                    },
+                  ),
+                  // 完结标识
+                  if (comic.finished)
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.green,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          '完结',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                  // 章节数
+                  Positioned(
+                    bottom: 4,
+                    left: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${comic.epsCount}话',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    comic.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (comic.author.isNotEmpty)
+                    Text(
+                      comic.author,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 模块设置页面
+class ModuleSettingsScreen extends StatefulWidget {
+  final ModuleInfo module;
+  
+  const ModuleSettingsScreen({super.key, required this.module});
+
+  @override
+  State<ModuleSettingsScreen> createState() => _ModuleSettingsScreenState();
+}
+
+class _ModuleSettingsScreenState extends State<ModuleSettingsScreen> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _loading = false;
+  bool _obscurePassword = true;
+  String? _message;
+  bool _isSuccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    try {
+      final username = await getModuleStorage(
+        moduleId: widget.module.id,
+        key: 'username',
+      );
+      final password = await getModuleStorage(
+        moduleId: widget.module.id,
+        key: 'password',
+      );
+      
+      if (username != null) {
+        _usernameController.text = username;
+      }
+      if (password != null) {
+        _passwordController.text = password;
+      }
+    } catch (e) {
+      debugPrint('Failed to load credentials: $e');
+    }
+  }
+
+  Future<void> _saveCredentials() async {
+    if (_loading) return;
+    
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+
+    try {
+      // 保存账号密码
+      await setModuleStorage(
+        moduleId: widget.module.id,
+        key: 'username',
+        value: _usernameController.text,
+      );
+      await setModuleStorage(
+        moduleId: widget.module.id,
+        key: 'password',
+        value: _passwordController.text,
+      );
+      
+      setState(() {
+        _message = '保存成功';
+        _isSuccess = true;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _message = '保存失败: $e';
+        _isSuccess = false;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _testLogin() async {
+    if (_loading) return;
+    
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+
+    try {
+      // 先保存
+      await setModuleStorage(
+        moduleId: widget.module.id,
+        key: 'username',
+        value: _usernameController.text,
+      );
+      await setModuleStorage(
+        moduleId: widget.module.id,
+        key: 'password',
+        value: _passwordController.text,
+      );
+      
+      // 重新加载模块以触发登录
+      await loadModule(moduleId: widget.module.id);
+      
+      setState(() {
+        _message = '登录成功';
+        _isSuccess = true;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _message = '登录失败: $e';
+        _isSuccess = false;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 检查是否需要账号设置（pikapika 和 jasmine）
+    final needsLogin = widget.module.id == 'pikapika' || 
+                       widget.module.id == 'jasmine';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${widget.module.name} 设置'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // 模块信息
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.extension, size: 40),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.module.name,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'ID: ${widget.module.id}',
+                              style: TextStyle(color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // 账号设置（仅 pikapika 和 jasmine）
+          if (needsLogin) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.account_circle),
+                        SizedBox(width: 8),
+                        Text(
+                          '账号设置',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _usernameController,
+                      decoration: const InputDecoration(
+                        labelText: '账号/邮箱',
+                        prefixIcon: Icon(Icons.person),
+                        border: OutlineInputBorder(),
+                      ),
+                      enabled: !_loading,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _passwordController,
+                      obscureText: _obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: '密码',
+                        prefixIcon: const Icon(Icons.lock),
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscurePassword 
+                                ? Icons.visibility_off 
+                                : Icons.visibility,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _obscurePassword = !_obscurePassword;
+                            });
+                          },
+                        ),
+                      ),
+                      enabled: !_loading,
+                    ),
+                    const SizedBox(height: 16),
+                    
+                    // 提示消息
+                    if (_message != null)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: _isSuccess 
+                              ? Colors.green[50] 
+                              : Colors.red[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _isSuccess 
+                                ? Colors.green 
+                                : Colors.red,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _isSuccess 
+                                  ? Icons.check_circle 
+                                  : Icons.error,
+                              color: _isSuccess 
+                                  ? Colors.green 
+                                  : Colors.red,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(_message!)),
+                          ],
+                        ),
+                      ),
+                    
+                    // 按钮
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _loading ? null : _saveCredentials,
+                            child: const Text('保存'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _loading ? null : _testLogin,
+                            child: _loading
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text('保存并登录'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ] else ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Icon(Icons.info_outline, size: 48, color: Colors.grey[400]),
+                    const SizedBox(height: 8),
+                    Text(
+                      '此模块无需配置',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
