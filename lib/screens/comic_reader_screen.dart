@@ -217,6 +217,14 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
           });
         }
       }
+      
+      // 加载翻页动画设置
+      final noAnimationStr = await loadAppSetting(key: 'reader_no_animation');
+      if (noAnimationStr != null) {
+        setState(() {
+          _noAnimation = noAnimationStr == 'true';
+        });
+      }
     } catch (e) {
       // 忽略错误，使用默认值
     }
@@ -257,6 +265,14 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
   Future<void> _saveSliderPosition(ReaderSliderPosition position) async {
     try {
       await saveAppSetting(key: 'reader_slider_position', value: position.index.toString());
+    } catch (e) {
+      // 忽略错误
+    }
+  }
+  
+  Future<void> _saveNoAnimation(bool noAnimation) async {
+    try {
+      await saveAppSetting(key: 'reader_no_animation', value: noAnimation.toString());
     } catch (e) {
       // 忽略错误
     }
@@ -790,17 +806,25 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         final targetOffset = currentOffset + screenSize * 0.9;
         
         if (targetOffset > _scrollController.position.maxScrollExtent) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
+          if (_noAnimation) {
+            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          } else {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          }
         } else {
-          _scrollController.animateTo(
-            targetOffset,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
+          if (_noAnimation) {
+            _scrollController.jumpTo(targetOffset);
+          } else {
+            _scrollController.animateTo(
+              targetOffset,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          }
         }
       }
     } else {
@@ -856,17 +880,25 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         final targetOffset = currentOffset - screenSize * 0.9;
         
         if (targetOffset < 0) {
-          _scrollController.animateTo(
-            0,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
+          if (_noAnimation) {
+            _scrollController.jumpTo(0);
+          } else {
+            _scrollController.animateTo(
+              0,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          }
         } else {
-          _scrollController.animateTo(
-            targetOffset,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
+          if (_noAnimation) {
+            _scrollController.jumpTo(targetOffset);
+          } else {
+            _scrollController.animateTo(
+              targetOffset,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          }
         }
       }
     } else {
@@ -1504,11 +1536,16 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         final viewportHeight = _scrollController.position.viewportDimension;
         final isVertical = _readerDirection == ReaderDirection.topToBottom;
         final scrollSize = isVertical ? viewportHeight : MediaQuery.of(context).size.width;
-        _scrollController.animateTo(
-          index * scrollSize * 0.8,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
+        final targetOffset = index * scrollSize * 0.8;
+        if (_noAnimation) {
+          _scrollController.jumpTo(targetOffset);
+        } else {
+          _scrollController.animateTo(
+            targetOffset,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+          );
+        }
       }
     } else if (_readerMode == ReaderMode.twoPageGallery) {
       // 双页模式：跳转到对应页面
@@ -1669,6 +1706,24 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                   _showTwoPageDirectionSelector();
                 },
               ),
+            // 翻页动画开关
+            ListTile(
+              leading: const Icon(Icons.animation, color: Colors.white),
+              title: const Text('翻页动画', style: TextStyle(color: Colors.white)),
+              subtitle: Text(
+                _noAnimation ? '已关闭' : '已开启',
+                style: const TextStyle(color: Colors.grey),
+              ),
+              trailing: Switch(
+                value: !_noAnimation,
+                onChanged: (value) {
+                  setState(() {
+                    _noAnimation = !value;
+                  });
+                  _saveNoAnimation(_noAnimation);
+                },
+              ),
+            ),
           ],
         ),
       ),
