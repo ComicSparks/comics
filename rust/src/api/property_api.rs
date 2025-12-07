@@ -139,3 +139,32 @@ pub struct PropertyItem {
     pub key: String,
     pub value: String,
 }
+
+// ========== 应用设置 API ==========
+// 使用特殊的 module_id "__app__" 来存储应用级别的设置
+
+const APP_MODULE_ID: &str = "__app__";
+
+/// 保存应用设置
+#[frb]
+pub async fn save_app_setting(key: String, value: String) -> anyhow::Result<()> {
+    save_property(APP_MODULE_ID.to_string(), key, value).await
+}
+
+/// 加载应用设置
+#[frb]
+pub async fn load_app_setting(key: String) -> anyhow::Result<Option<String>> {
+    load_property(APP_MODULE_ID.to_string(), key).await
+}
+
+/// 删除应用设置
+#[frb]
+pub async fn delete_app_setting(key: String) -> anyhow::Result<()> {
+    delete_property(APP_MODULE_ID.to_string(), key).await
+}
+
+/// 列出所有应用设置
+#[frb]
+pub async fn list_app_settings() -> anyhow::Result<Vec<PropertyItem>> {
+    list_properties(APP_MODULE_ID.to_string()).await
+}

@@ -52,6 +52,25 @@ Future<BigInt> clearModuleProperties({required String moduleId}) => RustLib
     .api
     .crateApiPropertyApiClearModuleProperties(moduleId: moduleId);
 
+/// 保存应用设置
+Future<void> saveAppSetting({required String key, required String value}) =>
+    RustLib.instance.api.crateApiPropertyApiSaveAppSetting(
+      key: key,
+      value: value,
+    );
+
+/// 加载应用设置
+Future<String?> loadAppSetting({required String key}) =>
+    RustLib.instance.api.crateApiPropertyApiLoadAppSetting(key: key);
+
+/// 删除应用设置
+Future<void> deleteAppSetting({required String key}) =>
+    RustLib.instance.api.crateApiPropertyApiDeleteAppSetting(key: key);
+
+/// 列出所有应用设置
+Future<List<PropertyItem>> listAppSettings() =>
+    RustLib.instance.api.crateApiPropertyApiListAppSettings();
+
 /// 属性项
 class PropertyItem {
   final String key;
