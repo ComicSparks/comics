@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
@@ -570,37 +571,53 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _importModuleFromFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
+        dialogTitle: '选择 JS 模块文件',
+        lockParentWindow: true,
+        allowMultiple: false,
         type: FileType.custom,
         allowedExtensions: ['js'],
+        withData: true,
       );
-      if (result == null || result.files.single.path == null) return;
+      if (result == null || result.files.isEmpty) return;
 
-      final sourceFile = File(result.files.single.path!);
-      if (!await sourceFile.exists()) {
-        _showSnack('文件不存在');
-        return;
-      }
-
-      final content = await sourceFile.readAsString();
-      final moduleId = _extractModuleId(content);
-      if (moduleId == null || moduleId.isEmpty) {
-        _showSnack('无法识别模块 ID');
-        return;
-      }
-
+      final picked = result.files.single;
       final modulesDir = getModulesDir();
       if (modulesDir == null) {
         _showSnack('模块目录未初始化');
         return;
       }
 
-      final targetDir = Directory(p.join(modulesDir, moduleId));
-      if (await targetDir.exists()) {
-        await targetDir.delete(recursive: true);
+      // 读取文件内容（优先 bytes，fallback path）
+      late final List<int> rawBytes;
+      late final String content;
+      if (picked.bytes != null && picked.bytes!.isNotEmpty) {
+        rawBytes = picked.bytes!;
+        content = utf8.decode(rawBytes);
+      } else if (picked.path != null) {
+        final sourceFile = File(picked.path!);
+        if (!await sourceFile.exists()) {
+          _showSnack('文件不存在');
+          return;
+        }
+        rawBytes = await sourceFile.readAsBytes();
+        content = utf8.decode(rawBytes);
+      } else {
+        _showSnack('未能读取文件内容');
+        return;
       }
-      await targetDir.create(recursive: true);
-      final targetFile = File(p.join(targetDir.path, '$moduleId.js'));
-      await sourceFile.copy(targetFile.path);
+
+      final moduleId = _extractModuleId(content);
+      if (moduleId == null || moduleId.isEmpty) {
+        _showSnack('无法识别模块 ID');
+        return;
+      }
+
+      // 直接放在 modules 根目录，兼容只扫描顶层文件的实现
+      final targetFile = File(p.join(modulesDir, '$moduleId.js'));
+      if (await targetFile.exists()) {
+        await targetFile.delete();
+      }
+      await targetFile.writeAsBytes(rawBytes);
 
       await scanAndRegisterModules();
       await _loadModules(rescan: false);
@@ -647,9 +664,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      final targetDir = Directory(p.join(modulesDir, module.id));
-      if (await targetDir.exists()) {
-        await targetDir.delete(recursive: true);
+      // 删除根目录下的 js 文件
+      final jsFile = File(p.join(modulesDir, '${module.id}.js'));
+      if (await jsFile.exists()) {
+        await jsFile.delete();
+      }
+      // 兼容旧版本：若存在子目录也清理掉
+      final legacyDir = Directory(p.join(modulesDir, module.id));
+      if (await legacyDir.exists()) {
+        await legacyDir.delete(recursive: true);
       }
 
       await clearModuleProperties(moduleId: module.id);

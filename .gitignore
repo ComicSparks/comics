@@ -47,3 +47,4 @@ app.*.map.json
 /references/
 /design/
 /modules/
+/android/app/src/main/jniLibs/
