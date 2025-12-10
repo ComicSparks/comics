@@ -239,10 +239,22 @@ pub async fn process_image_with_module(
     image_data_base64: String,
     params_json: String,
 ) -> anyhow::Result<String> {
+    tracing::info!("[Image Process] Processing image for module: {}, image size: {} bytes, params: {}", 
+        module_id, 
+        image_data_base64.len(),
+        params_json
+    );
+    
+    // 解析参数
+    let params: serde_json::Value = serde_json::from_str(&params_json)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    
+    tracing::debug!("[Image Process] Parsed params: {:?}", params);
+    
     // 尝试调用模块的 processImage 函数
     let args = serde_json::json!({
         "imageData": image_data_base64,
-        "params": serde_json::from_str::<serde_json::Value>(&params_json).unwrap_or(serde_json::json!({}))
+        "params": params
     });
     
     match module_api::call_module_function(
@@ -251,16 +263,30 @@ pub async fn process_image_with_module(
         serde_json::to_string(&args)?,
     ).await {
         Ok(result) => {
+            tracing::debug!("[Image Process] Module processImage returned result, length: {}", result.len());
+            
             // 解析返回结果
-            let result_json: serde_json::Value = serde_json::from_str(&result)?;
+            let result_json: serde_json::Value = match serde_json::from_str(&result) {
+                Ok(json) => json,
+                Err(e) => {
+                    tracing::error!("[Image Process] Failed to parse result JSON: {}", e);
+                    tracing::error!("[Image Process] Result (first 200 chars): {}", &result[..result.len().min(200)]);
+                    return Ok(image_data_base64);
+                }
+            };
+            
             if let Some(processed_data) = result_json.get("imageData").and_then(|v| v.as_str()) {
+                tracing::info!("[Image Process] Image processed successfully, processed size: {} bytes", processed_data.len());
                 Ok(processed_data.to_string())
             } else {
+                tracing::warn!("[Image Process] Result JSON missing 'imageData' field, returning original");
+                tracing::debug!("[Image Process] Result JSON: {:?}", result_json);
                 // 如果返回格式不对，返回原始数据
                 Ok(image_data_base64)
             }
         }
-        Err(_) => {
+        Err(e) => {
+            tracing::warn!("[Image Process] Module processImage failed or not found: {}, returning original", e);
             // 模块没有 processImage 函数或调用失败，返回原始数据
             Ok(image_data_base64)
         }

@@ -35,12 +35,18 @@ pub fn get_image_info(image_data_base64: String) -> anyhow::Result<String> {
 /// 返回：重新排列后的图片数据（base64 编码的 PNG）
 #[frb]
 pub fn rearrange_image_rows(image_data_base64: String, rows: u32) -> anyhow::Result<String> {
+    tracing::debug!("[Image API] rearrange_image_rows called with rows: {}, image size: {} bytes", rows, image_data_base64.len());
+    
     let image_bytes = BASE64.decode(&image_data_base64)?;
+    tracing::debug!("[Image API] Decoded image bytes: {} bytes", image_bytes.len());
+    
     let src = image::load_from_memory(&image_bytes)?;
     
     let width = src.width();
     let height = src.height();
     let remainder = height % rows;
+    
+    tracing::info!("[Image API] Image dimensions: {}x{}, rows: {}, remainder: {}", width, height, rows, remainder);
     
     // 转换为 RGBA
     let src_rgba = src.to_rgba8();
@@ -85,6 +91,7 @@ pub fn rearrange_image_rows(image_data_base64: String, rows: u32) -> anyhow::Res
     
     // 转换为 base64
     let base64_result = BASE64.encode(&png_data);
+    tracing::info!("[Image API] Image rearranged successfully, output size: {} bytes", base64_result.len());
     Ok(base64_result)
 }
 

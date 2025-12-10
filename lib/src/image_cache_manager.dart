@@ -42,9 +42,16 @@ class ImageCacheManager {
     Map<String, dynamic>? processParams,
   }) async {
     try {
+      // 生成缓存键（如果提供了处理参数，需要包含在缓存键中）
+      final cacheKey = _generateCacheKey(moduleId, url, processParams);
+      final cacheUrl = processParams != null && processParams.isNotEmpty
+          ? '$url?processed=${Uri.encodeComponent(jsonEncode(processParams))}'
+          : url;
+      
       // 先检查缓存
-      final cachedPath = await getCachedImagePath(moduleId, url);
+      final cachedPath = await getCachedImagePath(moduleId, cacheUrl);
       if (cachedPath != null) {
+        debugPrint('[Image Cache] Using cached image: $cachedPath');
         return cachedPath;
       }
 
@@ -65,9 +72,13 @@ class ImageCacheManager {
       // 如果提供了处理参数，尝试调用模块的图片处理函数
       if (processParams != null && processParams.isNotEmpty) {
         try {
+          debugPrint('[Image Cache] Processing image for module: $moduleId, params: $processParams');
+          debugPrint('[Image Cache] Original image size: ${imageBytes.length} bytes');
+          
           final imageDataBase64 = base64Encode(imageBytes);
           final paramsJson = jsonEncode(processParams);
           
+          debugPrint('[Image Cache] Calling processImageWithModule...');
           final processedDataBase64 = await api.processImageWithModule(
             moduleId: moduleId,
             imageDataBase64: imageDataBase64,
@@ -77,12 +88,17 @@ class ImageCacheManager {
           // 如果返回的数据与原始数据不同，说明处理成功
           if (processedDataBase64 != imageDataBase64) {
             imageBytes = base64Decode(processedDataBase64);
-            debugPrint('Image processed by module: $moduleId');
+            debugPrint('[Image Cache] Image processed successfully by module: $moduleId, processed size: ${imageBytes.length} bytes');
+          } else {
+            debugPrint('[Image Cache] Image processing returned same data, using original image');
           }
-        } catch (e) {
+        } catch (e, stackTrace) {
           // 处理失败，使用原始数据
-          debugPrint('Failed to process image with module: $e');
+          debugPrint('[Image Cache] Failed to process image with module: $e');
+          debugPrint('[Image Cache] Stack trace: $stackTrace');
         }
+      } else {
+        debugPrint('[Image Cache] No process params provided, skipping image processing');
       }
 
       // 获取缓存目录（使用 Rust 的缓存目录）
@@ -97,8 +113,10 @@ class ImageCacheManager {
       }
 
       // 生成文件名
-      final cacheKey = _generateCacheKey(moduleId, url);
-      final extension = _getExtensionFromUrl(url) ?? 'jpg';
+      // 如果图片被处理过，使用 PNG 格式（因为处理后的图片是 PNG）
+      final extension = (processParams != null && processParams.isNotEmpty) 
+          ? 'png' 
+          : (_getExtensionFromUrl(url) ?? 'jpg');
       final fileName = '$cacheKey.$extension';
       final filePath = path.join(cacheDir.path, fileName);
 
@@ -110,14 +128,21 @@ class ImageCacheManager {
       final contentType = response.headers['content-type'] ?? 'image/jpeg';
       final fileSize = await file.length();
 
+      // 保存缓存信息到数据库（使用处理后的 URL 作为缓存键）
+      final contentTypeToSave = (processParams != null && processParams.isNotEmpty)
+          ? 'image/png'  // 处理后的图片是 PNG 格式
+          : contentType;
+
       await api.saveImageToCache(
         moduleId: moduleId,
-        url: url,
+        url: cacheUrl,  // 使用包含处理参数的 URL
         filePath: filePath,
-        contentType: contentType,
+        contentType: contentTypeToSave,
         fileSize: fileSize, // PlatformInt64 会自动转换
         expireDays: expireDays,
       );
+      
+      debugPrint('[Image Cache] Image cached: $filePath (key: $cacheUrl)');
 
       return filePath;
     } catch (e) {
@@ -170,8 +195,13 @@ class ImageCacheManager {
   }
 
   /// 生成缓存键（与 Rust 端保持一致，使用 MD5）
-  String _generateCacheKey(String moduleId, String url) {
-    final combined = '$moduleId:$url';
+  String _generateCacheKey(String moduleId, String url, [Map<String, dynamic>? processParams]) {
+    String combined = '$moduleId:$url';
+    // 如果提供了处理参数，将其包含在缓存键中
+    if (processParams != null && processParams.isNotEmpty) {
+      final paramsStr = jsonEncode(processParams);
+      combined = '$combined:processed:$paramsStr';
+    }
     final bytes = utf8.encode(combined);
     final digest = md5.convert(bytes);
     return digest.toString();

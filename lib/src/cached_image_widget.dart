@@ -13,6 +13,9 @@ class CachedImageWidget extends StatefulWidget {
   final Widget? errorWidget;
   final double? width;
   final double? height;
+  /// 可选的图片元数据，用于图片处理
+  /// 如果提供了 metadata，将优先使用它而不是从 URL 解析
+  final Map<String, String>? metadata;
 
   const CachedImageWidget({
     super.key,
@@ -23,6 +26,7 @@ class CachedImageWidget extends StatefulWidget {
     this.errorWidget,
     this.width,
     this.height,
+    this.metadata,
   });
 
   @override
@@ -62,8 +66,20 @@ class _CachedImageWidgetState extends State<CachedImageWidget> {
       }
 
       // 缓存不存在，下载并缓存
-      // 提取图片处理参数（从 URL 中）
-      final processParams = _extractProcessParams(widget.moduleId, imageUrl);
+      // 提取图片处理参数（优先使用 metadata，否则从 URL 中解析）
+      Map<String, dynamic>? processParams;
+      if (widget.metadata != null && widget.metadata!.isNotEmpty) {
+        debugPrint('[CachedImage] Using metadata for image processing: ${widget.metadata}');
+        processParams = widget.metadata!.map((key, value) => MapEntry(key, value as dynamic));
+      } else {
+        debugPrint('[CachedImage] Extracting process params from URL: $imageUrl');
+        processParams = _extractProcessParams(widget.moduleId, imageUrl);
+        if (processParams != null) {
+          debugPrint('[CachedImage] Extracted params from URL: $processParams');
+        } else {
+          debugPrint('[CachedImage] No process params extracted');
+        }
+      }
       
       final newCachedPath = await _cacheManager.cacheImage(
         widget.moduleId,

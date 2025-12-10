@@ -1014,6 +1014,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     return CachedImageWidget(
       imageInfo: picture.media,
       moduleId: widget.moduleId,
+      metadata: picture.metadata,
       fit: isVertical ? BoxFit.fitWidth : BoxFit.fitHeight,
       width: isVertical ? double.infinity : null,
       height: isVertical ? null : double.infinity,
@@ -1307,6 +1308,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         child: CachedImageWidget(
           imageInfo: picture.media,
           moduleId: widget.moduleId,
+          metadata: picture.metadata,
           fit: fit,
           placeholder: Center(
             child: Column(

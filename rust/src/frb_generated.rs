@@ -2673,9 +2673,11 @@ impl SseDecode for crate::modules::types::Picture {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <String>::sse_decode(deserializer);
         let mut var_media = <crate::modules::types::RemoteImageInfo>::sse_decode(deserializer);
+        let mut var_metadata = <std::collections::HashMap<String, String>>::sse_decode(deserializer);
         return crate::modules::types::Picture {
             id: var_id,
             media: var_media,
+            metadata: var_metadata,
         };
     }
 }
@@ -3204,6 +3206,7 @@ impl flutter_rust_bridge::IntoDart for crate::modules::types::Picture {
         [
             self.id.into_into_dart().into_dart(),
             self.media.into_into_dart().into_dart(),
+            self.metadata.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -3605,6 +3608,7 @@ impl SseEncode for crate::modules::types::Picture {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.id, serializer);
         <crate::modules::types::RemoteImageInfo>::sse_encode(self.media, serializer);
+        <std::collections::HashMap<String, String>>::sse_encode(self.metadata, serializer);
     }
 }
 

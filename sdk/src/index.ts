@@ -58,6 +58,12 @@ export const RemoteImageInfo = {
 export interface Picture {
     id: string;
     media: RemoteImageInfo;
+    /** 
+     * 可选的元数据，用于存储图片处理所需的额外信息
+     * 例如：{"chapterId": "123", "imageName": "001.jpg"}
+     * 如果模块需要处理图片（如 jasmine 模块），应该在这里提供必要的参数
+     */
+    metadata?: Record<string, string>;
 }
 
 // ============ 分页相关 ============

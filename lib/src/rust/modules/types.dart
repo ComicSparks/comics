@@ -338,19 +338,36 @@ class PageInfo {
 class Picture {
   final String id;
   final RemoteImageInfo media;
+  /// 可选的元数据，用于存储图片处理所需的额外信息
+  /// 例如：{"chapterId": "123", "imageName": "001.jpg"}
+  final Map<String, String> metadata;
 
-  const Picture({required this.id, required this.media});
+  const Picture({
+    required this.id,
+    required this.media,
+    this.metadata = const {},
+  });
 
   @override
-  int get hashCode => id.hashCode ^ media.hashCode;
+  int get hashCode {
+    var hash = id.hashCode ^ media.hashCode;
+    for (var entry in metadata.entries) {
+      hash ^= entry.key.hashCode ^ entry.value.hashCode;
+    }
+    return hash;
+  }
 
   @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Picture &&
-          runtimeType == other.runtimeType &&
-          id == other.id &&
-          media == other.media;
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! Picture) return false;
+    if (id != other.id || media != other.media) return false;
+    if (metadata.length != other.metadata.length) return false;
+    for (var entry in metadata.entries) {
+      if (other.metadata[entry.key] != entry.value) return false;
+    }
+    return true;
+  }
 }
 
 /// 图片分页 (参考 pikapika PicturePage)

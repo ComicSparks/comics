@@ -207,6 +207,10 @@ pub struct EpPage {
 pub struct Picture {
     pub id: String,
     pub media: RemoteImageInfo,
+    /// 可选的元数据，用于存储图片处理所需的额外信息
+    /// 例如：{"chapterId": "123", "imageName": "001.jpg"}
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: std::collections::HashMap<String, String>,
 }
 
 /// 图片分页 (参考 pikapika PicturePage)

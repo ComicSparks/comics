@@ -308,6 +308,12 @@ async function getPictures(comicId, epId, page) {
                 path: img.url,
                 file_server: "",  // 如果 path 已经是完整URL，则 file_server 为空
             },
+            // 可选的元数据，用于图片处理
+            // 例如 jasmine 模块需要提供 chapterId 和 imageName
+            // metadata: {
+            //     chapterId: epId,
+            //     imageName: img.filename || `${index + 1}.jpg`
+            // }
         })),
     };
 }
