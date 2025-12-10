@@ -39,12 +39,6 @@ enum FullScreenAction {
   threeArea,           // 将屏幕划分成三个区域 (上一页, 下一页, 全屏)
 }
 
-/// 进度条位置
-enum ReaderSliderPosition {
-  bottom,  // 底部
-  right,   // 右侧
-  left,    // 左侧
-}
 
 extension ReaderModeExtension on ReaderMode {
   String get displayName {
@@ -125,7 +119,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
   ReaderDirection _readerDirection = ReaderDirection.topToBottom;
   TwoPageDirection _twoPageDirection = TwoPageDirection.leftToRight;
   FullScreenAction _fullScreenAction = FullScreenAction.touchOnce;
-  ReaderSliderPosition _sliderPosition = ReaderSliderPosition.bottom;
   bool _sliderDragging = false;
   
   final PageController _pageController = PageController();
@@ -209,17 +202,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         }
       }
       
-      // 加载进度条位置
-      final sliderStr = await loadAppSetting(key: 'reader_slider_position');
-      if (sliderStr != null) {
-        final sliderIndex = int.tryParse(sliderStr) ?? 0;
-        if (sliderIndex >= 0 && sliderIndex < ReaderSliderPosition.values.length) {
-          setState(() {
-            _sliderPosition = ReaderSliderPosition.values[sliderIndex];
-          });
-        }
-      }
-      
       // 加载翻页动画设置
       final noAnimationStr = await loadAppSetting(key: 'reader_no_animation');
       if (noAnimationStr != null) {
@@ -259,14 +241,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
   Future<void> _saveFullScreenAction(FullScreenAction action) async {
     try {
       await saveAppSetting(key: 'full_screen_action', value: action.index.toString());
-    } catch (e) {
-      // 忽略错误
-    }
-  }
-  
-  Future<void> _saveSliderPosition(ReaderSliderPosition position) async {
-    try {
-      await saveAppSetting(key: 'reader_slider_position', value: position.index.toString());
     } catch (e) {
       // 忽略错误
     }
@@ -470,69 +444,10 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                 ],
               ),
               actions: [
-                // 阅读模式切换按钮
-                PopupMenuButton<ReaderMode>(
-                  icon: Icon(_readerMode.icon),
-                  tooltip: '阅读模式',
-                  onSelected: (mode) {
-                    setState(() {
-                      _readerMode = mode;
-                    });
-                    _saveReaderMode(mode);
-                    // 切换模式后重置位置
-                    if (mode == ReaderMode.webtoon) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (_scrollController.hasClients) {
-                          // 计算大概的滚动位置
-                          final screenHeight = MediaQuery.of(context).size.height;
-                          _scrollController.jumpTo(_currentIndex * screenHeight * 0.8);
-                        }
-                      });
-                    } else {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (_pageController.hasClients) {
-                          _pageController.jumpToPage(_currentIndex);
-                        }
-                      });
-                    }
-                  },
-                  itemBuilder: (context) => ReaderMode.values.map((mode) {
-                    return PopupMenuItem<ReaderMode>(
-                      value: mode,
-                      child: Row(
-                        children: [
-                          Icon(
-                            mode.icon,
-                            color: mode == _readerMode
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            mode.displayName,
-                            style: TextStyle(
-                              color: mode == _readerMode
-                                  ? Theme.of(context).colorScheme.primary
-                                  : null,
-                              fontWeight: mode == _readerMode
-                                  ? FontWeight.bold
-                                  : null,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ),
                 IconButton(
                   icon: const Icon(Icons.list),
                   onPressed: _showEpSelector,
                   tooltip: '章节列表',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.fullscreen),
-                  onPressed: _toggleFullScreen,
-                  tooltip: '全屏',
                 ),
               ],
             ),
@@ -557,7 +472,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                 ),
               ),
             ),
-          _buildSideSlider(),
         ],
       ),
       bottomNavigationBar: _fullScreen
@@ -1357,10 +1271,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
   }
 
   Widget _buildBottomBar() {
-    if (_sliderPosition != ReaderSliderPosition.bottom) {
-      return Container();
-    }
-    
     return Container(
       color: Colors.black,
       padding: EdgeInsets.only(
@@ -1428,15 +1338,9 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                 tooltip: '上一章',
               ),
               IconButton(
-                icon: const Icon(Icons.list, color: Colors.white),
-                onPressed: _showEpSelector,
-                tooltip: '章节列表',
-              ),
-              // 阅读模式按钮
-              IconButton(
-                icon: Icon(_readerMode.icon, color: Colors.white),
-                onPressed: _showReaderModeSelector,
-                tooltip: '阅读模式',
+                icon: const Icon(Icons.fullscreen, color: Colors.white),
+                onPressed: _toggleFullScreen,
+                tooltip: '全屏',
               ),
               IconButton(
                 icon: const Icon(Icons.settings, color: Colors.white),
@@ -1455,73 +1359,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     );
   }
   
-  /// 构建侧边进度条
-  Widget _buildSideSlider() {
-    if (_sliderPosition == ReaderSliderPosition.bottom || _fullScreen) {
-      return Container();
-    }
-    
-    if (_pictures.isEmpty || _readerMode == ReaderMode.webtoonFreeZoom) {
-      return Container();
-    }
-    
-    final isRight = _sliderPosition == ReaderSliderPosition.right;
-    
-    return Align(
-      alignment: isRight ? Alignment.centerRight : Alignment.centerLeft,
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: 35,
-          height: 300,
-          decoration: BoxDecoration(
-            color: const Color(0x66000000),
-            borderRadius: BorderRadius.only(
-              topLeft: isRight ? const Radius.circular(10) : Radius.zero,
-              topRight: isRight ? Radius.zero : const Radius.circular(10),
-              bottomLeft: isRight ? const Radius.circular(10) : Radius.zero,
-              bottomRight: isRight ? Radius.zero : const Radius.circular(10),
-            ),
-          ),
-          padding: const EdgeInsets.only(top: 10, bottom: 10, left: 6, right: 6),
-          child: RotatedBox(
-            quarterTurns: 3,
-            child: GestureDetector(
-              onTapDown: (_) {
-                setState(() {
-                  _sliderDragging = true;
-                });
-              },
-              onTapUp: (_) {
-                setState(() {
-                  _sliderDragging = false;
-                });
-              },
-              child: Slider(
-                value: _currentIndex.toDouble(),
-                min: 0,
-                max: (_pictures.length - 1).toDouble(),
-                onChanged: (value) {
-                  final index = value.round();
-                  setState(() {
-                    _currentIndex = index;
-                    _sliderDragging = true;
-                  });
-                },
-                onChangeEnd: (value) {
-                  setState(() {
-                    _sliderDragging = false;
-                  });
-                  _jumpToIndex(value.round(), forceNoAnimation: true);
-                },
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   /// 跳转到指定索引
   void _jumpToIndex(int index, {bool forceNoAnimation = false}) {
     if (index < 0 || index >= _pictures.length) return;
@@ -1564,81 +1401,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     });
   }
 
-  /// 显示阅读模式选择器
-  void _showReaderModeSelector() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                '选择阅读模式',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            ...ReaderMode.values.map((mode) {
-              final isSelected = mode == _readerMode;
-              return ListTile(
-                leading: Icon(
-                  mode.icon,
-                  color: isSelected
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
-                ),
-                title: Text(
-                  mode.displayName,
-                  style: TextStyle(
-                    color: isSelected
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    fontWeight: isSelected ? FontWeight.bold : null,
-                  ),
-                ),
-                trailing: isSelected
-                    ? Icon(
-                        Icons.check,
-                        color: Theme.of(context).colorScheme.primary,
-                      )
-                    : null,
-                onTap: () {
-                  Navigator.pop(context);
-                  if (!isSelected) {
-                    setState(() {
-                      _readerMode = mode;
-                    });
-                    _saveReaderMode(mode);
-                    // 切换模式后重置位置
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mode == ReaderMode.webtoon || 
-                          mode == ReaderMode.webtoonZoom ||
-                          mode == ReaderMode.webtoonFreeZoom) {
-                        if (_scrollController.hasClients) {
-                          final screenHeight = MediaQuery.of(context).size.height;
-                          _scrollController.jumpTo(_currentIndex * screenHeight * 0.8);
-                        }
-                      } else {
-                        if (_pageController.hasClients) {
-                          _pageController.jumpToPage(_currentIndex);
-                        }
-                      }
-                    });
-                  }
-                },
-              );
-            }),
-          ],
-        ),
-      ),
-    );
-  }
-  
   /// 显示设置面板
   void _showSettingsPanel() {
     showModalBottomSheet(
@@ -1675,19 +1437,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
               onTap: () {
                 Navigator.pop(context);
                 _showFullScreenActionSelector();
-              },
-            ),
-            // 进度条位置
-            ListTile(
-              leading: const Icon(Icons.tune, color: Colors.white),
-              title: const Text('进度条位置', style: TextStyle(color: Colors.white)),
-              subtitle: Text(
-                _getSliderPositionName(),
-                style: const TextStyle(color: Colors.grey),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showSliderPositionSelector();
               },
             ),
             // 双页方向（仅双页模式显示）
@@ -1743,17 +1492,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         return '双击全屏 + 单击下一页';
       case FullScreenAction.threeArea:
         return '三区域控制';
-    }
-  }
-  
-  String _getSliderPositionName() {
-    switch (_sliderPosition) {
-      case ReaderSliderPosition.bottom:
-        return '底部';
-      case ReaderSliderPosition.right:
-        return '右侧';
-      case ReaderSliderPosition.left:
-        return '左侧';
     }
   }
   
@@ -1833,49 +1571,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         return '双击全屏 + 单击下一页';
       case FullScreenAction.threeArea:
         return '三区域控制';
-    }
-  }
-  
-  void _showSliderPositionSelector() {
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('选择进度条位置'),
-        children: ReaderSliderPosition.values.map((position) {
-          final isSelected = position == _sliderPosition;
-          return SimpleDialogOption(
-            child: Text(
-              _getSliderPositionNameForPosition(position),
-              style: TextStyle(
-                color: isSelected
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-                fontWeight: isSelected ? FontWeight.bold : null,
-              ),
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              if (!isSelected) {
-                setState(() {
-                  _sliderPosition = position;
-                });
-                _saveSliderPosition(position);
-              }
-            },
-          );
-        }).toList(),
-      ),
-    );
-  }
-  
-  String _getSliderPositionNameForPosition(ReaderSliderPosition position) {
-    switch (position) {
-      case ReaderSliderPosition.bottom:
-        return '底部';
-      case ReaderSliderPosition.right:
-        return '右侧';
-      case ReaderSliderPosition.left:
-        return '左侧';
     }
   }
   
