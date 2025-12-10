@@ -423,37 +423,65 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: _fullScreen
-          ? null
-          : AppBar(
-              backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.comicTitle,
-                    style: const TextStyle(fontSize: 14),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    _currentEp.title,
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.list),
-                  onPressed: _showEpSelector,
-                  tooltip: '章节列表',
-                ),
-              ],
-            ),
       body: Stack(
         children: [
           _buildBody(),
+          if (!_fullScreen)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                bottom: false,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withOpacity(0.8),
+                        Colors.black.withOpacity(0.0),
+                      ],
+                    ),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: AppBar(
+                    backgroundColor: Colors.transparent,
+                    elevation: 0,
+                    foregroundColor: Colors.white,
+                    title: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.comicTitle,
+                          style: const TextStyle(fontSize: 14),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          _currentEp.title,
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      IconButton(
+                        icon: const Icon(Icons.list),
+                        onPressed: _showEpSelector,
+                        tooltip: '章节列表',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (!_fullScreen)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildBottomBar(),
+            ),
           if (_sliderDragging)
             Center(
               child: Container(
@@ -474,9 +502,6 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
             ),
         ],
       ),
-      bottomNavigationBar: _fullScreen
-          ? null
-          : _buildBottomBar(),
     );
   }
 
