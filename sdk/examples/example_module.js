@@ -26,6 +26,9 @@ const moduleInfo = {
     icon: null,
     description: "这是一个示例漫画源模块，展示了标准接口的实现方式",
     enabled: true,
+    features: {
+        authForm: true
+    }
 };
 
 // ==================== 分类接口 ====================
@@ -444,4 +447,20 @@ module.exports = {
     getEps,
     getPictures,
     search,
+    // 示例：认证表单（账号、分流、密码）
+    authForm: {
+        fields: [
+            { key: 'username', type: 'text', label: '账号', placeholder: '请输入账号' },
+            { key: 'example_route', type: 'select', label: '分流', options: [ { label: '默认', value: 'default' } ], allowCustom: true, placeholder: '自定义分流或选择' },
+            { key: 'password', type: 'password', label: '密码', placeholder: '请输入密码' }
+        ]
+    },
+    submitAuthForm: async (values) => {
+        // 保存并尝试登录（示例逻辑）
+        if (values.example_route) await storage.set('example_route', values.example_route);
+        if (values.username) await storage.set('username', values.username);
+        if (values.password) await storage.set('password', values.password);
+        // 这里可以调用实际登录接口
+        return { success: true };
+    }
 };

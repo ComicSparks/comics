@@ -223,6 +223,47 @@ export interface ModuleInfo {
     author: string;
     description: string;
     icon?: string;
+    /** 模块特性声明 */
+    features?: {
+        /** 模块是否支持图片处理（processImage） */
+        processImage?: boolean;
+        /** 模块是否提供认证表单 */
+        authForm?: boolean;
+    };
+}
+
+// ============ 认证表单 ============
+
+export type AuthFieldType = 'text' | 'password' | 'select';
+
+export interface AuthFieldOption {
+    label: string;
+    value: string;
+}
+
+export interface AuthFormFieldBase {
+    key: string;
+    label: string;
+    placeholder?: string;
+}
+
+export interface AuthTextField extends AuthFormFieldBase {
+    type: 'text' | 'password';
+}
+
+export interface AuthSelectField extends AuthFormFieldBase {
+    type: 'select';
+    options: AuthFieldOption[];
+    /** 允许用户自定义文本（与下拉二选一） */
+    allowCustom?: boolean;
+    /** 当 allowCustom 为 true 时，自定义值的存储键（可与 key 相同或不同） */
+    customKey?: string;
+}
+
+export type AuthFormField = AuthTextField | AuthSelectField;
+
+export interface AuthForm {
+    fields: AuthFormField[];
 }
 
 /**
@@ -309,6 +350,11 @@ export interface IComicModule {
     
     /** 搜索漫画 */
     search(params: SearchParams): Promise<ComicsPage> | ComicsPage;
+
+    /** 可选：模块认证表单定义 */
+    authForm?: AuthForm;
+    /** 可选：提交表单，保存配置并执行登录 */
+    submitAuthForm?(values: Record<string, string>): Promise<{ success: boolean }>|{ success: boolean };
 }
 
 // ============ 运行时 API ============

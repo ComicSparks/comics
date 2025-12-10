@@ -1617,23 +1617,9 @@ class _GalleryReaderState extends _ImageReaderContentState {
   }
 
   Map<String, dynamic>? _processParams(String moduleId, Picture picture) {
-    // 优先使用 metadata
+    // 仅依据图片 metadata 判断是否需要处理
     if (picture.metadata.isNotEmpty) {
       return picture.metadata.map((k, v) => MapEntry(k, v as dynamic));
-    }
-    // 针对 jasmine 的参数提取
-    if (moduleId == 'jasmine') {
-      try {
-        final uri = Uri.parse(_composeUrl(picture));
-        final segments = uri.pathSegments;
-        final idx = segments.indexOf('photos');
-        if (idx != -1 && idx + 2 < segments.length) {
-          return {
-            'chapterId': segments[idx + 1],
-            'imageName': segments[idx + 2],
-          };
-        }
-      } catch (_) {}
     }
     return null;
   }
@@ -1852,19 +1838,6 @@ class _TwoPageGalleryReaderState extends _ImageReaderContentState {
   Map<String, dynamic>? _processParams(String moduleId, Picture picture) {
     if (picture.metadata.isNotEmpty) {
       return picture.metadata.map((k, v) => MapEntry(k, v as dynamic));
-    }
-    if (moduleId == 'jasmine') {
-      try {
-        final uri = Uri.parse(_composeUrl(picture));
-        final segments = uri.pathSegments;
-        final idx = segments.indexOf('photos');
-        if (idx != -1 && idx + 2 < segments.length) {
-          return {
-            'chapterId': segments[idx + 1],
-            'imageName': segments[idx + 2],
-          };
-        }
-      } catch (_) {}
     }
     return null;
   }
