@@ -1,12 +1,58 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:photo_view/photo_view_gallery.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:event/event.dart';
 import 'package:comics/src/rust/api/module_api.dart';
 import 'package:comics/src/rust/api/property_api.dart';
 import 'package:comics/src/rust/modules/types.dart';
 import 'package:comics/src/cached_image_widget.dart';
-import 'package:comics/src/image_cache_manager.dart';
+import 'package:comics/src/gesture_zoom_box.dart';
 import 'comics_screen.dart' show getImageUrl;
+
+///////////////////////////////////////////////////////////////////////////////
+// 事件系统
+
+Event<_ReaderControllerEventArgs> _readerControllerEvent =
+    Event<_ReaderControllerEventArgs>();
+
+class _ReaderControllerEventArgs extends EventArgs {
+  final String key;
+
+  _ReaderControllerEventArgs(this.key);
+}
+
+Widget readerKeyboardHolder(Widget widget) {
+  if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+    widget = RawKeyboardListener(
+      focusNode: FocusNode(),
+      autofocus: true,
+      onKey: (event) {
+        if (event is RawKeyDownEvent) {
+          if (event.isKeyPressed(LogicalKeyboardKey.arrowUp)) {
+            _readerControllerEvent.broadcast(_ReaderControllerEventArgs("UP"));
+          }
+          if (event.isKeyPressed(LogicalKeyboardKey.arrowDown)) {
+            _readerControllerEvent.broadcast(_ReaderControllerEventArgs("DOWN"));
+          }
+          if (event.isKeyPressed(LogicalKeyboardKey.arrowLeft)) {
+            _readerControllerEvent.broadcast(_ReaderControllerEventArgs("LEFT"));
+          }
+          if (event.isKeyPressed(LogicalKeyboardKey.arrowRight)) {
+            _readerControllerEvent.broadcast(_ReaderControllerEventArgs("RIGHT"));
+          }
+        }
+      },
+      child: widget,
+    );
+  }
+  return widget;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 /// 阅读器模式
 enum ReaderMode {
@@ -93,6 +139,7 @@ class ComicReaderScreen extends StatefulWidget {
   final List<Ep> epList;
   final Ep currentEp;
   final int? initPosition;
+  final bool autoFullScreen;
 
   const ComicReaderScreen({
     super.key,
@@ -102,6 +149,7 @@ class ComicReaderScreen extends StatefulWidget {
     required this.epList,
     required this.currentEp,
     this.initPosition,
+    this.autoFullScreen = false,
   });
 
   @override
@@ -109,242 +157,792 @@ class ComicReaderScreen extends StatefulWidget {
 }
 
 class _ComicReaderScreenState extends State<ComicReaderScreen> {
-  List<Picture> _pictures = [];
-  bool _loading = true;
-  String? _error;
+  late Ep _ep;
   bool _fullScreen = false;
-  int _currentIndex = 0;
-  late Ep _currentEp;
-  ReaderMode _readerMode = ReaderMode.webtoon;
-  ReaderDirection _readerDirection = ReaderDirection.topToBottom;
-  TwoPageDirection _twoPageDirection = TwoPageDirection.leftToRight;
-  FullScreenAction _fullScreenAction = FullScreenAction.touchOnce;
-  bool _sliderDragging = false;
-  
-  final PageController _pageController = PageController();
-  final ScrollController _scrollController = ScrollController();
-  final TransformationController _transformController = TransformationController();
-  
-  // 翻页防抖时间戳
-  int _pageControllerTime = 0;
-  
-  // 是否禁用动画
-  bool _noAnimation = false;
-  
-  // 用于区分单击和双击的标志
-  bool _isDoubleTap = false;
-  Timer? _singleTapTimer;
+  late Future<List<Picture>> _future;
+  int? _lastChangeRank;
+  bool _replacement = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _currentEp = widget.currentEp;
-    _loadReaderSettings();
-    _loadPictures();
-  }
+  Future<List<Picture>> _load() async {
+    // 加载所有页面的图片
+    List<Picture> allPictures = [];
+    int page = 1;
+    int totalPages = 1;
 
-  @override
-  void dispose() {
-    _pageController.dispose();
-    _scrollController.dispose();
-    _transformController.dispose();
-    _singleTapTimer?.cancel();
-    // 退出时恢复系统 UI
-    if (_fullScreen) {
-      _exitFullScreen();
-    }
-    super.dispose();
-  }
-  
-  Future<void> _loadReaderSettings() async {
-    try {
-      // 加载阅读器模式
-      final modeStr = await loadAppSetting(key: 'reader_mode');
-      if (modeStr != null) {
-        final modeIndex = int.tryParse(modeStr) ?? 0;
-        if (modeIndex >= 0 && modeIndex < ReaderMode.values.length) {
-          setState(() {
-            _readerMode = ReaderMode.values[modeIndex];
-          });
-        }
-      }
-      
-      // 加载阅读方向
-      final directionStr = await loadAppSetting(key: 'reader_direction');
-      if (directionStr != null) {
-        final directionIndex = int.tryParse(directionStr) ?? 0;
-        if (directionIndex >= 0 && directionIndex < ReaderDirection.values.length) {
-          setState(() {
-            _readerDirection = ReaderDirection.values[directionIndex];
-          });
-        }
-      }
-      
-      // 加载双页方向
-      final twoPageStr = await loadAppSetting(key: 'two_page_direction');
-      if (twoPageStr != null) {
-        final twoPageIndex = int.tryParse(twoPageStr) ?? 0;
-        if (twoPageIndex >= 0 && twoPageIndex < TwoPageDirection.values.length) {
-          setState(() {
-            _twoPageDirection = TwoPageDirection.values[twoPageIndex];
-          });
-        }
-      }
-      
-      // 加载全屏操作模式
-      final fullScreenStr = await loadAppSetting(key: 'full_screen_action');
-      if (fullScreenStr != null) {
-        final fullScreenIndex = int.tryParse(fullScreenStr) ?? 0;
-        if (fullScreenIndex >= 0 && fullScreenIndex < FullScreenAction.values.length) {
-          setState(() {
-            _fullScreenAction = FullScreenAction.values[fullScreenIndex];
-          });
-        }
-      }
-      
-      // 加载翻页动画设置
-      final noAnimationStr = await loadAppSetting(key: 'reader_no_animation');
-      if (noAnimationStr != null) {
-        setState(() {
-          _noAnimation = noAnimationStr == 'true';
-        });
-      }
-    } catch (e) {
-      // 忽略错误，使用默认值
-    }
-  }
-  
-  Future<void> _saveReaderMode(ReaderMode mode) async {
-    try {
-      await saveAppSetting(key: 'reader_mode', value: mode.index.toString());
-    } catch (e) {
-      // 忽略错误
-    }
-  }
-  
-  Future<void> _saveReaderDirection(ReaderDirection direction) async {
-    try {
-      await saveAppSetting(key: 'reader_direction', value: direction.index.toString());
-    } catch (e) {
-      // 忽略错误
-    }
-  }
-  
-  Future<void> _saveTwoPageDirection(TwoPageDirection direction) async {
-    try {
-      await saveAppSetting(key: 'two_page_direction', value: direction.index.toString());
-    } catch (e) {
-      // 忽略错误
-    }
-  }
-  
-  Future<void> _saveFullScreenAction(FullScreenAction action) async {
-    try {
-      await saveAppSetting(key: 'full_screen_action', value: action.index.toString());
-    } catch (e) {
-      // 忽略错误
-    }
-  }
-  
-  Future<void> _saveNoAnimation(bool noAnimation) async {
-    try {
-      await saveAppSetting(key: 'reader_no_animation', value: noAnimation.toString());
-    } catch (e) {
-      // 保存失败，恢复原状态
-      if (mounted) {
-        setState(() {
-          _noAnimation = !noAnimation;
-        });
-      }
-    }
-  }
+    do {
+      final picturePage = await getPictures(
+        moduleId: widget.moduleId,
+        comicId: widget.comicId,
+        epId: _ep.id,
+        page: page,
+      );
+      allPictures.addAll(picturePage.docs);
+      totalPages = picturePage.pageInfo.pages;
+      page++;
+    } while (page <= totalPages);
 
-  Future<void> _loadPictures() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-      _pictures = [];
-    });
-
-    try {
-      List<Picture> allPictures = [];
-      int page = 1;
-      int totalPages = 1;
-
-      do {
-        final picturePage = await getPictures(
-          moduleId: widget.moduleId,
-          comicId: widget.comicId,
-          epId: _currentEp.id,
-          page: page,
+    if (widget.autoFullScreen) {
+      setState(() {
+        SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: [],
         );
-        allPictures.addAll(picturePage.docs);
-        totalPages = picturePage.pageInfo.pages;
-        page++;
-      } while (page <= totalPages);
-
-      final initIndex = widget.initPosition ?? 0;
-      setState(() {
-        _pictures = allPictures;
-        _loading = false;
-        _currentIndex = initIndex;
-      });
-
-      // 跳转到指定位置
-      if (initIndex > 0 && initIndex < allPictures.length) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _jumpToIndex(initIndex);
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _loading = false;
+        _fullScreen = true;
       });
     }
+    return allPictures;
   }
 
-  void _toggleFullScreen() {
-    setState(() {
-      _fullScreen = !_fullScreen;
-      if (_fullScreen) {
-        _enterFullScreen();
-      } else {
-        _exitFullScreen();
-      }
-    });
+  Future _onPositionChange(int position) async {
+    _lastChangeRank = position;
+    // TODO: 保存阅读位置到历史记录
   }
 
-  void _enterFullScreen() {
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  }
-
-  void _exitFullScreen() {
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.manual,
-      overlays: SystemUiOverlay.values,
-    );
-  }
-
-  void _goToPreviousEp() {
-    final currentOrder = _currentEp.order;
-    final previousEp = widget.epList.where((e) => e.order < currentOrder).toList();
-    if (previousEp.isNotEmpty) {
-      previousEp.sort((a, b) => b.order.compareTo(a.order));
-      _changeEp(previousEp.first);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已经是第一章了')),
+  FutureOr<dynamic> _onChangeEp(int epOrder) {
+    var orderMap = <int, Ep>{};
+    for (var element in widget.epList) {
+      orderMap[element.order] = element;
+    }
+    if (orderMap.containsKey(epOrder)) {
+      _replacement = true;
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          pageBuilder: (_, __, ___) => ComicReaderScreen(
+            moduleId: widget.moduleId,
+            comicId: widget.comicId,
+            comicTitle: widget.comicTitle,
+            epList: widget.epList,
+            currentEp: orderMap[epOrder]!,
+            autoFullScreen: _fullScreen,
+          ),
+        ),
       );
     }
   }
 
-  void _goToNextEp() {
-    final currentOrder = _currentEp.order;
-    final nextEp = widget.epList.where((e) => e.order > currentOrder).toList();
-    if (nextEp.isNotEmpty) {
-      nextEp.sort((a, b) => a.order.compareTo(b.order));
-      _changeEp(nextEp.first);
+  FutureOr<dynamic> _onReloadEp() {
+    _replacement = true;
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (_, __, ___) => ComicReaderScreen(
+          moduleId: widget.moduleId,
+          comicId: widget.comicId,
+          comicTitle: widget.comicTitle,
+          epList: widget.epList,
+          currentEp: _ep,
+          initPosition: _lastChangeRank ?? widget.initPosition,
+          autoFullScreen: _fullScreen,
+        ),
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    // EP
+    _ep = widget.currentEp;
+    // INIT
+    _future = _load();
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    if (!_replacement) {
+      // 恢复系统UI
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return buildScreen(context);
+  }
+
+  Widget buildScreen(BuildContext context) {
+    return readerKeyboardHolder(_build(context));
+  }
+
+  Widget _build(BuildContext context) {
+    return FutureBuilder(
+      future: _future,
+      builder: (BuildContext context, AsyncSnapshot<List<Picture>> snapshot) {
+        if (snapshot.hasError) {
+          return Scaffold(
+            appBar: _fullScreen
+                ? null
+                : AppBar(
+                    title: Text("${_ep.title} - ${widget.comicTitle}"),
+                  ),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.error_outline, size: 60, color: Colors.red),
+                  const SizedBox(height: 16),
+                  Text('加载失败: ${snapshot.error}'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        _future = _load();
+                      });
+                    },
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        if (snapshot.connectionState != ConnectionState.done) {
+          return Scaffold(
+            appBar: _fullScreen
+                ? null
+                : AppBar(
+                    title: Text("${_ep.title} - ${widget.comicTitle}"),
+                  ),
+            body: const Center(
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+        var epNameMap = <int, String>{};
+        for (var element in widget.epList) {
+          epNameMap[element.order] = element.title;
+        }
+        return Scaffold(
+          // 让内容可以延伸到状态栏/APPBar区域，配合我们自定义叠加的 AppBar
+          extendBodyBehindAppBar: true,
+          body: ImageReader(
+            ImageReaderStruct(
+              moduleId: widget.moduleId,
+              images: snapshot.data!,
+              fullScreen: _fullScreen,
+              onFullScreenChange: _onFullScreenChange,
+              onPositionChange: _onPositionChange,
+              initPosition: widget.initPosition,
+              epNameMap: epNameMap,
+              epOrder: _ep.order,
+              comicTitle: widget.comicTitle,
+              onChangeEp: _onChangeEp,
+              onReloadEp: _onReloadEp,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future _onFullScreenChange(bool fullScreen) async {
+    setState(() {
+      if (fullScreen) {
+        if (Platform.isAndroid || Platform.isIOS) {
+          SystemChrome.setEnabledSystemUIMode(
+            SystemUiMode.manual,
+            overlays: [],
+          );
+        }
+      } else {
+        SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: SystemUiOverlay.values,
+        );
+      }
+      _fullScreen = fullScreen;
+    });
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ImageReader 结构
+
+class ImageReaderStruct {
+  final String moduleId;
+  final List<Picture> images;
+  final bool fullScreen;
+  final FutureOr<dynamic> Function(bool fullScreen) onFullScreenChange;
+  final FutureOr<dynamic> Function(int) onPositionChange;
+  final int? initPosition;
+  final Map<int, String> epNameMap;
+  final int epOrder;
+  final String comicTitle;
+  final FutureOr<dynamic> Function(int) onChangeEp;
+  final FutureOr<dynamic> Function() onReloadEp;
+
+  const ImageReaderStruct({
+    required this.moduleId,
+    required this.images,
+    required this.fullScreen,
+    required this.onFullScreenChange,
+    required this.onPositionChange,
+    this.initPosition,
+    required this.epNameMap,
+    required this.epOrder,
+    required this.comicTitle,
+    required this.onChangeEp,
+    required this.onReloadEp,
+  });
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ImageReader 组件
+
+class ImageReader extends StatefulWidget {
+  final ImageReaderStruct struct;
+
+  const ImageReader(this.struct, {super.key});
+
+  @override
+  State<StatefulWidget> createState() => _ImageReaderState();
+}
+
+class _ImageReaderState extends State<ImageReader> {
+  // 记录初始方向
+  final ReaderDirection _pagerDirection = ReaderDirection.topToBottom;
+
+  // 记录初始阅读器类型
+  ReaderMode _pagerType = ReaderMode.webtoon;
+
+  // 记录了控制器
+  FullScreenAction _fullScreenAction = FullScreenAction.touchOnce;
+
+  bool _settingsLoaded = false;
+  bool _noAnimation = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    // 加载阅读器模式
+    final modeStr = await loadAppSetting(key: 'reader_mode');
+    int modeIndex = 0;
+    if (modeStr != null) {
+      modeIndex = int.tryParse(modeStr) ?? 0;
+    }
+    if (modeIndex >= 0 && modeIndex < ReaderMode.values.length) {
+      _pagerType = ReaderMode.values[modeIndex];
+    } else {
+      _pagerType = ReaderMode.webtoon;
+    }
+
+    // 加载全屏操作模式
+    final fullScreenStr = await loadAppSetting(key: 'full_screen_action');
+    int fullScreenIndex = 0;
+    if (fullScreenStr != null) {
+      fullScreenIndex = int.tryParse(fullScreenStr) ?? 0;
+    }
+    if (fullScreenIndex >= 0 && fullScreenIndex < FullScreenAction.values.length) {
+      _fullScreenAction = FullScreenAction.values[fullScreenIndex];
+    } else {
+      _fullScreenAction = FullScreenAction.touchOnce;
+    }
+
+    // 加载取消翻页动画
+    final noAniStr = await loadAppSetting(key: 'no_animation');
+    if (noAniStr != null) {
+      _noAnimation = noAniStr == '1' || noAniStr.toLowerCase() == 'true';
+    } else {
+      _noAnimation = false;
+    }
+
+    setState(() {
+      _settingsLoaded = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_settingsLoaded) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+    return _ImageReaderContent(
+      widget.struct,
+      _pagerDirection,
+      _pagerType,
+      _fullScreenAction,
+      _noAnimation,
+    );
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ImageReaderContent
+
+class _ImageReaderContent extends StatefulWidget {
+  // 记录初始方向
+  final ReaderDirection pagerDirection;
+
+  // 记录初始阅读器类型
+  final ReaderMode pagerType;
+
+  final FullScreenAction fullScreenAction;
+
+  // 是否取消翻页动画
+  final bool noAnimation;
+
+  final ImageReaderStruct struct;
+
+  const _ImageReaderContent(
+    this.struct,
+    this.pagerDirection,
+    this.pagerType,
+    this.fullScreenAction,
+    this.noAnimation,
+  );
+
+  @override
+  State<StatefulWidget> createState() {
+    switch (pagerType) {
+      case ReaderMode.webtoon:
+        return _WebToonReaderState();
+      case ReaderMode.webtoonZoom:
+        return _WebToonZoomReaderState();
+      case ReaderMode.gallery:
+        return _GalleryReaderState();
+      case ReaderMode.webtoonFreeZoom:
+        return _ListViewReaderState();
+      case ReaderMode.twoPageGallery:
+        return _TwoPageGalleryReaderState();
+    }
+  }
+}
+///////////////////////////////////////////////////////////////////////////////
+// Abstract State
+
+abstract class _ImageReaderContentState extends State<_ImageReaderContent> {
+  bool _sliderDragging = false;
+
+  // 阅读器
+  Widget _buildViewer();
+
+  Widget _buildViewerProcess() {
+    return Stack(
+      children: [
+        _buildViewer(),
+        if (_sliderDragging) _sliderDraggingText(),
+      ],
+    );
+  }
+
+  Widget _sliderDraggingText() {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0x88000000),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          "${_slider + 1} / ${widget.struct.images.length}",
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 30,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 键盘, 音量键 等事件
+  void _needJumpTo(int index, bool animation);
+
+  void _needScrollForward();
+
+  void _needScrollBackward();
+
+  @override
+  void initState() {
+    _initCurrent();
+    _readerControllerEvent.subscribe(_onPageControl);
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _readerControllerEvent.unsubscribe(_onPageControl);
+    super.dispose();
+  }
+
+  void _onPageControl(_ReaderControllerEventArgs? args) {
+    if (args != null) {
+      var event = args.key;
+      switch (event) {
+        case "UP":
+          if (widget.pagerType == ReaderMode.webtoonFreeZoom) {
+            _needScrollBackward();
+            break;
+          }
+          if (_current > 0) {
+            _needJumpTo(_current - 1, true);
+          }
+          break;
+        case "DOWN":
+          if (widget.pagerType == ReaderMode.webtoonFreeZoom) {
+            _needScrollForward();
+            break;
+          }
+          int point = 1;
+          if (widget.pagerType == ReaderMode.twoPageGallery) {
+            point = 2;
+          }
+          if (_current < widget.struct.images.length - point) {
+            _needJumpTo(_current + point, true);
+          }
+          break;
+        case "LEFT":
+          if (_current > 0) {
+            _needJumpTo(_current - 1, true);
+          }
+          break;
+        case "RIGHT":
+          int point = 1;
+          if (widget.pagerType == ReaderMode.twoPageGallery) {
+            point = 2;
+          }
+          if (_current < widget.struct.images.length - point) {
+            _needJumpTo(_current + point, true);
+          }
+          break;
+      }
+    }
+  }
+
+  late int _startIndex;
+  late int _current;
+  late int _slider;
+
+  void _initCurrent() {
+    if (widget.struct.initPosition != null &&
+        widget.struct.images.length > widget.struct.initPosition!) {
+      _startIndex = widget.struct.initPosition!;
+    } else {
+      _startIndex = 0;
+    }
+    _current = _startIndex;
+    _slider = _startIndex;
+  }
+
+  void _onCurrentChange(int index) {
+    if (index != _current) {
+      setState(() {
+        _current = index;
+        _slider = index;
+        widget.struct.onPositionChange(index);
+      });
+    }
+  }
+
+  // 与显示有关的方法
+
+  @override
+  Widget build(BuildContext context) {
+    switch (widget.fullScreenAction) {
+      case FullScreenAction.controller:
+        return _buildLayout(_buildFullScreenControllerStackItem());
+      case FullScreenAction.touchOnce:
+        return _buildLayout(
+          _buildTouchOnceControllerAction(Container()),
+        );
+      case FullScreenAction.touchDouble:
+        return _buildLayout(
+          _buildTouchDoubleControllerAction(Container()),
+        );
+      case FullScreenAction.touchDoubleOnceNext:
+        return _buildLayout(
+          _buildTouchDoubleOnceNextControllerAction(Container()),
+        );
+      case FullScreenAction.threeArea:
+        return _buildLayout(_buildThreeAreaControllerAction());
+    }
+  }
+
+  Widget _buildLayout(Widget overlayChild) {
+    return Stack(
+      children: [
+        _buildViewerProcess(),
+        overlayChild,
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: _buildSliderBottom(),
+        ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: _buildAppBar(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAppBar() {
+    if (widget.struct.fullScreen) {
+      return const SizedBox.shrink();
+    }
+    return AppBar(
+      title: Text(widget.struct.comicTitle),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.list),
+          onPressed: _onChooseEp,
+        ),
+        IconButton(
+          icon: const Icon(Icons.settings),
+          onPressed: _onMoreSetting,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSliderBottom() {
+    if (widget.struct.fullScreen) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      height: 45,
+      color: const Color(0x88000000),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(width: 15),
+          Text(
+            '${_slider + 1}',
+            style: const TextStyle(color: Colors.white),
+          ),
+          Expanded(
+            child: _buildSliderWidget(),
+          ),
+          Text(
+            '${widget.struct.images.length}',
+            style: const TextStyle(color: Colors.white),
+          ),
+          Container(width: 15),
+        ],
+      ),
+    );
+  }
+
+
+
+  Widget _buildSliderWidget() {
+    return Slider(
+      min: 0,
+      max: (widget.struct.images.length - 1).toDouble(),
+      value: _slider.toDouble(),
+      onChangeStart: (value) {
+        setState(() {
+          _sliderDragging = true;
+        });
+      },
+      onChangeEnd: (value) {
+        setState(() {
+          _sliderDragging = false;
+        });
+      },
+      onChanged: (value) {
+        _slider = value.toInt();
+        setState(() {});
+      },
+    );
+  }
+
+  Widget _buildFullScreenControllerStackItem() {
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.bottomRight,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            margin: const EdgeInsets.all(10),
+            padding: const EdgeInsets.only(left: 10, right: 10, top: 4, bottom: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              color: const Color(0x88000000),
+            ),
+            child: GestureDetector(
+              onTap: () {
+                widget.struct.onFullScreenChange(!widget.struct.fullScreen);
+              },
+              child: Icon(
+                widget.struct.fullScreen
+                    ? Icons.fullscreen_exit
+                    : Icons.fullscreen_outlined,
+                size: 30,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTouchOnceControllerAction(Widget child) {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          widget.struct.onFullScreenChange(!widget.struct.fullScreen);
+        },
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildTouchDoubleControllerAction(Widget child) {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onDoubleTap: () {
+          widget.struct.onFullScreenChange(!widget.struct.fullScreen);
+        },
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildTouchDoubleOnceNextControllerAction(Widget child) {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          // 下一页
+          if (_current < widget.struct.images.length - 1) {
+            _needJumpTo(_current + 1, true);
+          } else {
+            _onNextAction();
+          }
+        },
+        onDoubleTap: () {
+          widget.struct.onFullScreenChange(!widget.struct.fullScreen);
+        },
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildThreeAreaControllerAction() {
+    return Positioned.fill(
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final width = constraints.maxWidth;
+          final height = constraints.maxHeight;
+          final areaSize = 0.3; // 30% on each side
+
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapUp: (TapUpDetails details) {
+              final position = details.localPosition;
+
+            if (widget.pagerDirection == ReaderDirection.topToBottom) {
+              // 垂直方向
+              if (position.dy < height * areaSize) {
+                // 上方区域 - 上一页
+                if (_current > 0) {
+                  _needJumpTo(_current - 1, true);
+                }
+              } else if (position.dy > height * (1 - areaSize)) {
+                // 下方区域 - 下一页
+                if (_current < widget.struct.images.length - 1) {
+                  _needJumpTo(_current + 1, true);
+                } else {
+                  _onNextAction();
+                }
+              } else {
+                // 中间区域 - 全屏切换
+                widget.struct.onFullScreenChange(!widget.struct.fullScreen);
+              }
+            } else {
+              // 水平方向
+              final isRTL = widget.pagerDirection == ReaderDirection.rightToLeft;
+              if (position.dx < width * areaSize) {
+                // 左侧区域
+                if (isRTL) {
+                  // 右到左模式，左侧是下一页
+                  if (_current < widget.struct.images.length - 1) {
+                    _needJumpTo(_current + 1, true);
+                  } else {
+                    _onNextAction();
+                  }
+                } else {
+                  // 左到右模式，左侧是上一页
+                  if (_current > 0) {
+                    _needJumpTo(_current - 1, true);
+                  }
+                }
+              } else if (position.dx > width * (1 - areaSize)) {
+                // 右侧区域
+                if (isRTL) {
+                  // 右到左模式，右侧是上一页
+                  if (_current > 0) {
+                    _needJumpTo(_current - 1, true);
+                  }
+                } else {
+                  // 左到右模式，右侧是下一页
+                  if (_current < widget.struct.images.length - 1) {
+                    _needJumpTo(_current + 1, true);
+                  } else {
+                    _onNextAction();
+                  }
+                }
+              } else {
+                // 中间区域 - 全屏切换
+                widget.struct.onFullScreenChange(!widget.struct.fullScreen);
+              }
+            }
+          },
+          child: Container(),
+        );
+      },
+    )
+    );
+  }
+
+  Future _onChooseEp() async {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => _EpChooser(
+        widget.struct.epNameMap,
+        widget.struct.epOrder,
+        widget.struct.onChangeEp,
+      ),
+    );
+  }
+
+  Future _onMoreSetting() async {
+    await showModalBottomSheet(
+      context: context,
+      builder: (context) => _SettingPanel(
+        widget.struct.onReloadEp,
+      ),
+    );
+  }
+
+  bool _fullscreenController() {
+    return widget.fullScreenAction == FullScreenAction.controller;
+  }
+
+  Future _onNextAction() async {
+    if (widget.struct.epNameMap.containsKey(widget.struct.epOrder + 1)) {
+      widget.struct.onChangeEp(widget.struct.epOrder + 1);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已经是最后一章了')),
@@ -352,1239 +950,183 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
     }
   }
 
-  void _changeEp(Ep ep) {
-    setState(() {
-      _currentEp = ep;
-      _currentIndex = 0;
-    });
-    _pageController.jumpToPage(0);
-    _loadPictures();
-  }
+  bool _hasNextEp() =>
+      widget.struct.epNameMap.containsKey(widget.struct.epOrder + 1);
 
-  void _showEpSelector() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => Container(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.6,
-        ),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              child: const Text(
-                '选择章节',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: ListView.builder(
-                itemCount: widget.epList.length,
-                itemBuilder: (context, index) {
-                  final ep = widget.epList[index];
-                  final isCurrentEp = ep.id == _currentEp.id;
-                  return ListTile(
-                    title: Text(
-                      ep.title,
-                      style: TextStyle(
-                        color: isCurrentEp
-                            ? Theme.of(context).colorScheme.primary
-                            : null,
-                        fontWeight: isCurrentEp ? FontWeight.bold : null,
-                      ),
-                    ),
-                    trailing: isCurrentEp
-                        ? Icon(
-                            Icons.check,
-                            color: Theme.of(context).colorScheme.primary,
-                          )
-                        : null,
-                    onTap: () {
-                      Navigator.pop(context);
-                      if (!isCurrentEp) {
-                        _changeEp(ep);
-                      }
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+  double _topBarHeight() => Scaffold.of(context).appBarMaxHeight ?? 0;
+
+  double _bottomBarHeight() => 45;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Ep Chooser
+
+class _EpChooser extends StatefulWidget {
+  final Map<int, String> epNameMap;
+  final int epOrder;
+  final FutureOr Function(int) onChangeEp;
+
+  const _EpChooser(this.epNameMap, this.epOrder, this.onChangeEp);
+
+  @override
+  State<StatefulWidget> createState() => _EpChooserState();
+}
+
+class _EpChooserState extends State<_EpChooser> {
+  @override
+  Widget build(BuildContext context) {
+    var entries = widget.epNameMap.entries.toList();
+    entries.sort((a, b) => a.key - b.key);
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.5,
+      child: ListView.builder(
+        itemCount: entries.length,
+        itemBuilder: (context, index) {
+          final entry = entries[index];
+          final isCurrent = entry.key == widget.epOrder;
+          return ListTile(
+            title: Text(entry.value),
+            trailing: isCurrent
+                ? const Icon(Icons.check, color: Colors.green)
+                : null,
+            selected: isCurrent,
+            onTap: () {
+              Navigator.pop(context);
+              widget.onChangeEp(entry.key);
+            },
+          );
+        },
       ),
     );
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Setting Panel
+
+class _SettingPanel extends StatefulWidget {
+  final FutureOr Function() onReloadEp;
+
+  const _SettingPanel(this.onReloadEp);
+
+  @override
+  State<StatefulWidget> createState() => _SettingPanelState();
+}
+
+class _SettingPanelState extends State<_SettingPanel> {
+  late ReaderMode _readerMode = ReaderMode.webtoon;
+  late FullScreenAction _fullScreenAction = FullScreenAction.touchOnce;
+  bool _noAnimation = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final modeStr = await loadAppSetting(key: 'reader_mode');
+    final fullScreenStr = await loadAppSetting(key: 'full_screen_action');
+    final noAniStr = await loadAppSetting(key: 'no_animation');
+
+    setState(() {
+      if (modeStr != null) {
+        final index = int.tryParse(modeStr) ?? 0;
+        if (index >= 0 && index < ReaderMode.values.length) {
+          _readerMode = ReaderMode.values[index];
+        }
+      }
+      if (fullScreenStr != null) {
+        final index = int.tryParse(fullScreenStr) ?? 0;
+        if (index >= 0 && index < FullScreenAction.values.length) {
+          _fullScreenAction = FullScreenAction.values[index];
+        }
+      }
+      if (noAniStr != null) {
+        _noAnimation = noAniStr == '1' || noAniStr.toLowerCase() == 'true';
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          _buildBody(),
-          if (!_fullScreen)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: SafeArea(
-                bottom: false,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.black.withOpacity(0.8),
-                        Colors.black.withOpacity(0.0),
-                      ],
-                    ),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: AppBar(
-                    backgroundColor: Colors.transparent,
-                    elevation: 0,
-                    foregroundColor: Colors.white,
-                    title: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.comicTitle,
-                          style: const TextStyle(fontSize: 14),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          _currentEp.title,
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                    actions: [
-                      IconButton(
-                        icon: const Icon(Icons.list),
-                        onPressed: _showEpSelector,
-                        tooltip: '章节列表',
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (!_fullScreen)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: _buildBottomBar(),
-            ),
-          if (_sliderDragging)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0x88000000),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  "${_currentIndex + 1} / ${_pictures.length}",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 30,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      );
-    }
-
-    if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.red),
-            const SizedBox(height: 16),
-            Text(
-              '加载失败',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: Colors.white,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadPictures,
-              child: const Text('重试'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_pictures.isEmpty) {
-      return const Center(
-        child: Text(
-          '暂无图片',
-          style: TextStyle(color: Colors.white),
-        ),
-      );
-    }
-
-    // 根据阅读模式选择不同的布局
-    switch (_readerMode) {
-      case ReaderMode.webtoon:
-        return _buildWebtoonReader();
-      case ReaderMode.webtoonZoom:
-        return _buildWebtoonZoomReader();
-      case ReaderMode.gallery:
-        return _buildGalleryReader();
-      case ReaderMode.webtoonFreeZoom:
-        return _buildWebtoonFreeZoomReader();
-      case ReaderMode.twoPageGallery:
-        return _buildTwoPageGalleryReader();
-    }
-  }
-
-  /// 相册模式阅读器（Gallery 模式）
-  Widget _buildGalleryReader() {
-    final isHorizontal = _readerDirection != ReaderDirection.topToBottom;
-    final reverse = _readerDirection == ReaderDirection.rightToLeft;
-    
-    Widget pageView = PageView.builder(
-      controller: _pageController,
-      scrollDirection: isHorizontal ? Axis.horizontal : Axis.vertical,
-      reverse: reverse,
-      itemCount: _pictures.length,
-      onPageChanged: (index) {
-        setState(() {
-          _currentIndex = index;
-        });
-        // 重置缩放
-        _transformController.value = Matrix4.identity();
-        // 预加载相邻图片
-        _preloadImages(index);
-      },
-      itemBuilder: (context, index) {
-        return _buildImageItem(index);
-      },
-    );
-    
-    // 根据全屏模式包装手势
-    Widget content = _buildFullScreenGesture(child: pageView);
-    
-    // 三区域控制需要覆盖在最上层
-    if (_fullScreenAction == FullScreenAction.threeArea) {
-      content = Stack(
-        children: [
-          content,
-          _buildThreeAreaController(),
-        ],
-      );
-    }
-    
-    return content;
-  }
-  
-  /// 三区域控制器
-  Widget _buildThreeAreaController() {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final isHorizontal = _readerDirection != ReaderDirection.topToBottom;
-        final reverse = _readerDirection == ReaderDirection.rightToLeft;
-        
-        // 上一页区域
-        final previousArea = Expanded(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () {
-              // 防抖检查
-              final now = DateTime.now().millisecondsSinceEpoch;
-              if (now < _pageControllerTime + 400) {
-                return;
-              }
-              _pageControllerTime = now;
-              _goToPreviousPage();
-            },
-            child: Container(color: Colors.transparent),
-          ),
-        );
-        
-        // 全屏区域
-        final fullScreenArea = Expanded(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: _toggleFullScreen,
-            child: Container(color: Colors.transparent),
-          ),
-        );
-        
-        // 下一页区域
-        final nextArea = Expanded(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () {
-              // 防抖检查
-              final now = DateTime.now().millisecondsSinceEpoch;
-              if (now < _pageControllerTime + 400) {
-                return;
-              }
-              _pageControllerTime = now;
-              _goToNextPage();
-            },
-            child: Container(color: Colors.transparent),
-          ),
-        );
-        
-        Widget child;
-        if (isHorizontal) {
-          // 水平方向
-          if (reverse) {
-            // 右到左：需要交换左右区域
-            child = Row(children: [nextArea, fullScreenArea, previousArea]);
-          } else {
-            // 左到右：正常布局
-            child = Row(children: [previousArea, fullScreenArea, nextArea]);
-          }
-        } else {
-          // 垂直方向：上（上一页）、中（全屏）、下（下一页）
-          child = Column(children: [previousArea, fullScreenArea, nextArea]);
-        }
-        
-        return SizedBox(
-          width: constraints.maxWidth,
-          height: constraints.maxHeight,
-          child: child,
-        );
-      },
-    );
-  }
-  
-  /// 根据全屏操作模式构建手势
-  Widget _buildFullScreenGesture({required Widget child}) {
-    switch (_fullScreenAction) {
-      case FullScreenAction.touchOnce:
-        return GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTap: _toggleFullScreen,
-          child: child,
-        );
-      case FullScreenAction.touchDouble:
-        return GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onDoubleTap: _toggleFullScreen,
-          child: child,
-        );
-      case FullScreenAction.touchDoubleOnceNext:
-        // 使用 GestureDetector 处理单击和双击
-        return GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTap: () {
-            // 取消之前的定时器
-            _singleTapTimer?.cancel();
-            // 如果不是双击，延迟执行单击操作
-            if (!_isDoubleTap) {
-              _singleTapTimer = Timer(const Duration(milliseconds: 200), () {
-                if (mounted && !_isDoubleTap) {
-                  _goToNextPage();
-                }
-                _isDoubleTap = false;
-              });
-            } else {
-              _isDoubleTap = false;
-            }
-          },
-          onDoubleTap: () {
-            // 取消单击定时器
-            _singleTapTimer?.cancel();
-            _isDoubleTap = true;
-            _toggleFullScreen();
-          },
-          child: child,
-        );
-      case FullScreenAction.controller:
-      case FullScreenAction.threeArea:
-        return child;
-    }
-  }
-  
-  /// 翻到下一页
-  void _goToNextPage() {
-    // 防抖检查
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (now < _pageControllerTime + 400) {
-      return;
-    }
-    _pageControllerTime = now;
-    
-    if (_readerMode == ReaderMode.webtoon || 
-        _readerMode == ReaderMode.webtoonZoom ||
-        _readerMode == ReaderMode.webtoonFreeZoom) {
-      // Webtoon 模式：向下滚动一屏
-      if (_scrollController.hasClients) {
-        final isVertical = _readerDirection == ReaderDirection.topToBottom;
-        final screenSize = isVertical 
-            ? MediaQuery.of(context).size.height
-            : MediaQuery.of(context).size.width;
-        final currentOffset = _scrollController.offset;
-        final targetOffset = currentOffset + screenSize * 0.9;
-        
-        if (targetOffset > _scrollController.position.maxScrollExtent) {
-          if (_noAnimation) {
-            _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-          } else {
-            _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          }
-        } else {
-          if (_noAnimation) {
-            _scrollController.jumpTo(targetOffset);
-          } else {
-            _scrollController.animateTo(
-              targetOffset,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          }
-        }
-      }
-    } else {
-      // Gallery 模式：翻到下一页
-      if (_pageController.hasClients && _currentIndex < _pictures.length - 1) {
-        final isHorizontal = _readerDirection != ReaderDirection.topToBottom;
-        final reverse = _readerDirection == ReaderDirection.rightToLeft;
-        
-        // 根据方向判断下一页
-        if (isHorizontal) {
-          if (reverse) {
-            // 右到左：左侧是下一页
-            if (_currentIndex > 0) {
-              _pageController.previousPage(
-                duration: _noAnimation ? Duration.zero : const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-            }
-          } else {
-            // 左到右：右侧是下一页
-            if (_currentIndex < _pictures.length - 1) {
-              _pageController.nextPage(
-                duration: _noAnimation ? Duration.zero : const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-            }
-          }
-        } else {
-          // 垂直方向：向下是下一页
-          if (_currentIndex < _pictures.length - 1) {
-            _pageController.nextPage(
-              duration: _noAnimation ? Duration.zero : const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          }
-        }
-      }
-    }
-  }
-  
-  /// 翻到上一页
-  void _goToPreviousPage() {
-    if (_readerMode == ReaderMode.webtoon || 
-        _readerMode == ReaderMode.webtoonZoom ||
-        _readerMode == ReaderMode.webtoonFreeZoom) {
-      // Webtoon 模式：向上滚动一屏
-      if (_scrollController.hasClients) {
-        final isVertical = _readerDirection == ReaderDirection.topToBottom;
-        final screenSize = isVertical 
-            ? MediaQuery.of(context).size.height
-            : MediaQuery.of(context).size.width;
-        final currentOffset = _scrollController.offset;
-        final targetOffset = currentOffset - screenSize * 0.9;
-        
-        if (targetOffset < 0) {
-          if (_noAnimation) {
-            _scrollController.jumpTo(0);
-          } else {
-            _scrollController.animateTo(
-              0,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          }
-        } else {
-          if (_noAnimation) {
-            _scrollController.jumpTo(targetOffset);
-          } else {
-            _scrollController.animateTo(
-              targetOffset,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          }
-        }
-      }
-    } else {
-      // Gallery 模式：翻到上一页
-      if (_pageController.hasClients && _currentIndex > 0) {
-        final isHorizontal = _readerDirection != ReaderDirection.topToBottom;
-        final reverse = _readerDirection == ReaderDirection.rightToLeft;
-        
-        // 根据方向判断上一页
-        if (isHorizontal) {
-          if (reverse) {
-            // 右到左：右侧是上一页
-            if (_currentIndex < _pictures.length - 1) {
-              _pageController.nextPage(
-                duration: _noAnimation ? Duration.zero : const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-            }
-          } else {
-            // 左到右：左侧是上一页
-            if (_currentIndex > 0) {
-              _pageController.previousPage(
-                duration: _noAnimation ? Duration.zero : const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-              );
-            }
-          }
-        } else {
-          // 垂直方向：向上是上一页
-          if (_currentIndex > 0) {
-            _pageController.previousPage(
-              duration: _noAnimation ? Duration.zero : const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-          }
-        }
-      }
-    }
-  }
-  
-  /// 预加载图片
-  void _preloadImages(int currentIndex) {
-    // 预加载前后各2张图片（使用自定义缓存）
-    final cacheManager = ImageCacheManager();
-    for (int i = currentIndex - 2; i <= currentIndex + 2; i++) {
-      if (i >= 0 && i < _pictures.length && i != currentIndex) {
-        final picture = _pictures[i];
-        final imageUrl = getImageUrl(picture.media);
-        // 使用自定义缓存预加载
-        cacheManager.cacheImage(
-          widget.moduleId,
-          imageUrl,
-          headers: picture.media.headers,
-        ).catchError((e) {
-          // 忽略预加载错误
-          return null;
-        });
-      }
-    }
-  }
-
-  /// 上下滚动阅读器（Webtoon 模式）
-  Widget _buildWebtoonReader() {
-    final isVertical = _readerDirection == ReaderDirection.topToBottom;
-    
-    Widget listView = NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is ScrollUpdateNotification) {
-          // 更新当前索引（基于滚动位置）
-          _updateCurrentIndexFromScroll();
-        }
-        return false;
-      },
-      child: ListView.builder(
-        controller: _scrollController,
-        scrollDirection: isVertical ? Axis.vertical : Axis.horizontal,
-        reverse: _readerDirection == ReaderDirection.rightToLeft,
-        itemCount: _pictures.length,
-        itemBuilder: (context, index) {
-          return _buildWebtoonImageItem(index);
-        },
-      ),
-    );
-    
-    // 根据全屏模式包装手势
-    Widget content = _buildFullScreenGesture(child: listView);
-    
-    // 三区域控制需要覆盖在最上层
-    if (_fullScreenAction == FullScreenAction.threeArea) {
-      content = Stack(
-        children: [
-          content,
-          _buildThreeAreaController(),
-        ],
-      );
-    }
-    
-    return content;
-  }
-  
-  /// WebToon 模式图片项
-  Widget _buildWebtoonImageItem(int index) {
-    final picture = _pictures[index];
-    final isVertical = _readerDirection == ReaderDirection.topToBottom;
-    
-    return CachedImageWidget(
-      imageInfo: picture.media,
-      moduleId: widget.moduleId,
-      metadata: picture.metadata,
-      fit: isVertical ? BoxFit.fitWidth : BoxFit.fitHeight,
-      width: isVertical ? double.infinity : null,
-      height: isVertical ? null : double.infinity,
-      placeholder: Container(
-        height: isVertical ? 300 : null,
-        width: isVertical ? null : 300,
-        alignment: Alignment.center,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const CircularProgressIndicator(
-              color: Colors.white,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '${index + 1} / ${_pictures.length}',
-              style: const TextStyle(color: Colors.white),
-            ),
-          ],
-        ),
-      ),
-      errorWidget: Container(
-        height: isVertical ? 300 : null,
-        width: isVertical ? null : 300,
-        alignment: Alignment.center,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.broken_image,
-              size: 60,
-              color: Colors.grey,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '图片加载失败\n${index + 1} / ${_pictures.length}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  /// WebToon 双击放大模式
-  Widget _buildWebtoonZoomReader() {
-    final isVertical = _readerDirection == ReaderDirection.topToBottom;
-    
-    Widget listView = NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is ScrollUpdateNotification) {
-          _updateCurrentIndexFromScroll();
-        }
-        return false;
-      },
-      child: ListView.builder(
-        controller: _scrollController,
-        scrollDirection: isVertical ? Axis.vertical : Axis.horizontal,
-        reverse: _readerDirection == ReaderDirection.rightToLeft,
-        itemCount: _pictures.length,
-        itemBuilder: (context, index) {
-          return _buildWebtoonImageItem(index);
-        },
-      ),
-    );
-    
-    // 双击放大功能（使用 InteractiveViewer 包装）
-    Widget content = GestureDetector(
-      onDoubleTap: _toggleFullScreen,
-      child: InteractiveViewer(
-        transformationController: _transformController,
-        minScale: 1.0,
-        maxScale: 3.0,
-        child: listView,
-      ),
-    );
-    
-    // 根据全屏模式包装手势
-    if (_fullScreenAction == FullScreenAction.touchOnce) {
-      content = GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: _toggleFullScreen,
-        child: content,
-      );
-    }
-    
-    // 三区域控制需要覆盖在最上层
-    if (_fullScreenAction == FullScreenAction.threeArea) {
-      content = Stack(
-        children: [
-          content,
-          _buildThreeAreaController(),
-        ],
-      );
-    }
-    
-    return content;
-  }
-  
-  /// WebToon 自由缩放模式
-  Widget _buildWebtoonFreeZoomReader() {
-    final isVertical = _readerDirection == ReaderDirection.topToBottom;
-    
-    Widget listView = ListView.builder(
-      controller: _scrollController,
-      scrollDirection: isVertical ? Axis.vertical : Axis.horizontal,
-      reverse: _readerDirection == ReaderDirection.rightToLeft,
-      itemCount: _pictures.length,
-      itemBuilder: (context, index) {
-        return _buildWebtoonImageItem(index);
-      },
-    );
-    
-    Widget content = InteractiveViewer(
-      transformationController: _transformController,
-      minScale: 1.0,
-      maxScale: 2.0,
-      child: listView,
-    );
-    
-    // 根据全屏模式包装手势
-    if (_fullScreenAction == FullScreenAction.touchDouble) {
-      content = GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onDoubleTap: _toggleFullScreen,
-        child: content,
-      );
-    } else if (_fullScreenAction == FullScreenAction.touchDoubleOnceNext) {
-      content = GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: () {
-          // 取消之前的定时器
-          _singleTapTimer?.cancel();
-          // 如果不是双击，延迟执行单击操作
-          if (!_isDoubleTap) {
-            _singleTapTimer = Timer(const Duration(milliseconds: 200), () {
-              if (mounted && !_isDoubleTap) {
-                _goToNextPage();
-              }
-              _isDoubleTap = false;
-            });
-          } else {
-            _isDoubleTap = false;
-          }
-        },
-        onDoubleTap: () {
-          // 取消单击定时器
-          _singleTapTimer?.cancel();
-          _isDoubleTap = true;
-          _toggleFullScreen();
-        },
-        child: content,
-      );
-    }
-    
-    // 三区域控制需要覆盖在最上层
-    if (_fullScreenAction == FullScreenAction.threeArea) {
-      content = Stack(
-        children: [
-          content,
-          _buildThreeAreaController(),
-        ],
-      );
-    }
-    
-    return content;
-  }
-  
-  /// 双页模式阅读器
-  Widget _buildTwoPageGalleryReader() {
-    final isHorizontal = _readerDirection != ReaderDirection.topToBottom;
-    final reverse = _readerDirection == ReaderDirection.rightToLeft;
-    
-    Widget pageView = PageView.builder(
-      controller: _pageController,
-      scrollDirection: isHorizontal ? Axis.horizontal : Axis.vertical,
-      reverse: reverse,
-      itemCount: (_pictures.length / 2).ceil(),
-      onPageChanged: (pageIndex) {
-        final imageIndex = pageIndex * 2;
-        setState(() {
-          _currentIndex = imageIndex;
-        });
-        _transformController.value = Matrix4.identity();
-        // 预加载相邻图片
-        _preloadImages(imageIndex);
-      },
-      itemBuilder: (context, pageIndex) {
-        final leftIndex = pageIndex * 2;
-        final rightIndex = leftIndex + 1;
-        
-        // 根据双页方向决定左右顺序
-        final firstIndex = _twoPageDirection == TwoPageDirection.leftToRight 
-            ? leftIndex 
-            : (rightIndex < _pictures.length ? rightIndex : leftIndex);
-        final secondIndex = _twoPageDirection == TwoPageDirection.leftToRight
-            ? (rightIndex < _pictures.length ? rightIndex : null)
-            : leftIndex;
-        
-        return Row(
-          children: [
-            Expanded(
-              child: _buildImageItem(
-                firstIndex,
-                fit: BoxFit.contain,
-              ),
-            ),
-            Expanded(
-              child: secondIndex != null
-                  ? _buildImageItem(
-                      secondIndex,
-                      fit: BoxFit.contain,
-                    )
-                  : Container(
-                      color: Colors.black,
-                      child: const Center(
-                        child: Text(
-                          '空白页',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      ),
-                    ),
-            ),
-          ],
-        );
-      },
-    );
-    
-    // 根据全屏模式包装手势
-    Widget content = _buildFullScreenGesture(child: pageView);
-    
-    // 三区域控制需要覆盖在最上层
-    if (_fullScreenAction == FullScreenAction.threeArea) {
-      content = Stack(
-        children: [
-          content,
-          _buildThreeAreaController(),
-        ],
-      );
-    }
-    
-    return content;
-  }
-
-  void _updateCurrentIndexFromScroll() {
-    if (!_scrollController.hasClients) return;
-    
-    // 简单估算当前索引
-    final offset = _scrollController.offset;
-    final viewportHeight = _scrollController.position.viewportDimension;
-    final estimatedIndex = (offset / (viewportHeight * 0.8)).round();
-    
-    if (estimatedIndex >= 0 && estimatedIndex < _pictures.length) {
-      if (_currentIndex != estimatedIndex) {
-        setState(() {
-          _currentIndex = estimatedIndex;
-        });
-      }
-    }
-  }
-
-  /// 构建单个图片项
-  Widget _buildImageItem(int index, {BoxFit fit = BoxFit.contain}) {
-    if (index < 0 || index >= _pictures.length) {
-      return Container(
-        color: Colors.black,
-        child: const Center(
-          child: Text(
-            '图片不存在',
-            style: TextStyle(color: Colors.grey),
-          ),
-        ),
-      );
-    }
-    
-    final picture = _pictures[index];
-    
-    // 在 touchDoubleOnceNext 模式下，如果图片没有缩放，禁用平移以允许手势传递
-    final matrix = _transformController.value;
-    final scale = matrix.getMaxScaleOnAxis();
-    final isScaled = scale > 1.01; // 允许小的误差
-    final panEnabled = _fullScreenAction != FullScreenAction.touchDoubleOnceNext || isScaled;
-    
-    return InteractiveViewer(
-      transformationController: _transformController,
-      minScale: 0.5,
-      maxScale: 4.0,
-      panEnabled: panEnabled,
-      child: Center(
-        child: CachedImageWidget(
-          imageInfo: picture.media,
-          moduleId: widget.moduleId,
-          metadata: picture.metadata,
-          fit: fit,
-          placeholder: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const CircularProgressIndicator(
-                  color: Colors.white,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  '${index + 1} / ${_pictures.length}',
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ],
-            ),
-          ),
-          errorWidget: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(
-                  Icons.broken_image,
-                  size: 60,
-                  color: Colors.grey,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '图片加载失败\n${index + 1} / ${_pictures.length}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.grey),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () {
-                    // 重新加载图片
-                    setState(() {});
-                  },
-                  child: const Text('重试', style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBottomBar() {
     return Container(
-      color: Colors.black,
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).padding.bottom,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      height: MediaQuery.of(context).size.height * 0.7,
+      child: ListView(
         children: [
-          // 进度条
-          if (_pictures.isNotEmpty && _readerMode != ReaderMode.webtoonFreeZoom)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Text(
-                    '${_currentIndex + 1}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  Expanded(
-                    child: GestureDetector(
-                      onTapDown: (_) {
-                        setState(() {
-                          _sliderDragging = true;
-                        });
-                      },
-                      onTapUp: (_) {
-                        setState(() {
-                          _sliderDragging = false;
-                        });
-                      },
-                      child: Slider(
-                        value: _currentIndex.toDouble(),
-                        min: 0,
-                        max: (_pictures.length - 1).toDouble(),
-                        onChanged: (value) {
-                          final index = value.round();
-                          setState(() {
-                            _currentIndex = index;
-                            _sliderDragging = true;
-                          });
-                        },
-                        onChangeEnd: (value) {
-                          setState(() {
-                            _sliderDragging = false;
-                          });
-                          _jumpToIndex(value.round(), forceNoAnimation: true);
-                        },
+          ListTile(
+            title: const Text('阅读器模式'),
+            subtitle: Text(_readerMode.displayName),
+            onTap: () async {
+              final result = await showDialog<ReaderMode>(
+                context: context,
+                builder: (context) => SimpleDialog(
+                  title: const Text('选择阅读器模式'),
+                  children: ReaderMode.values.map((mode) {
+                    return SimpleDialogOption(
+                      child: ListTile(
+                        leading: Icon(mode.icon),
+                        title: Text(mode.displayName),
+                        trailing: mode == _readerMode
+                            ? const Icon(Icons.check, color: Colors.green)
+                            : null,
                       ),
-                    ),
-                  ),
-                  Text(
-                    '${_pictures.length}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
-              ),
-            ),
-          // 操作按钮
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.skip_previous, color: Colors.white),
-                onPressed: _goToPreviousEp,
-                tooltip: '上一章',
-              ),
-              IconButton(
-                icon: const Icon(Icons.fullscreen, color: Colors.white),
-                onPressed: _toggleFullScreen,
-                tooltip: '全屏',
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings, color: Colors.white),
-                onPressed: _showSettingsPanel,
-                tooltip: '设置',
-              ),
-              IconButton(
-                icon: const Icon(Icons.skip_next, color: Colors.white),
-                onPressed: _goToNextEp,
-                tooltip: '下一章',
-              ),
-            ],
+                      onPressed: () => Navigator.pop(context, mode),
+                    );
+                  }).toList(),
+                ),
+              );
+              if (result != null) {
+                await saveAppSetting(key: 'reader_mode', value: result.index.toString());
+                setState(() => _readerMode = result);
+                widget.onReloadEp();
+              }
+            },
+          ),
+          ListTile(
+            title: const Text('全屏操作模式'),
+            subtitle: Text(_getFullScreenActionName(_fullScreenAction)),
+            onTap: () async {
+              final result = await showDialog<FullScreenAction>(
+                context: context,
+                builder: (context) => SimpleDialog(
+                  title: const Text('选择全屏操作模式'),
+                  children: FullScreenAction.values.map((action) {
+                    return SimpleDialogOption(
+                      child: ListTile(
+                        title: Text(_getFullScreenActionName(action)),
+                        trailing: action == _fullScreenAction
+                            ? const Icon(Icons.check, color: Colors.green)
+                            : null,
+                      ),
+                      onPressed: () => Navigator.pop(context, action),
+                    );
+                  }).toList(),
+                ),
+              );
+              if (result != null) {
+                await saveAppSetting(key: 'full_screen_action', value: result.index.toString());
+                setState(() => _fullScreenAction = result);
+                widget.onReloadEp();
+              }
+            },
+          ),
+          SwitchListTile(
+            title: const Text('取消翻页动画'),
+            subtitle: const Text('禁用列表/画廊翻页动画，直接跳转'),
+            value: _noAnimation,
+            onChanged: (v) async {
+              setState(() => _noAnimation = v);
+              await saveAppSetting(key: 'no_animation', value: v ? '1' : '0');
+              widget.onReloadEp();
+            },
           ),
         ],
       ),
     );
   }
-  
-  /// 跳转到指定索引
-  void _jumpToIndex(int index, {bool forceNoAnimation = false}) {
-    if (index < 0 || index >= _pictures.length) return;
-    
-    final useNoAnimation = forceNoAnimation || _noAnimation;
-    
-    if (_readerMode == ReaderMode.webtoon || 
-        _readerMode == ReaderMode.webtoonZoom ||
-        _readerMode == ReaderMode.webtoonFreeZoom) {
-      // Webtoon 模式：滚动到估算位置
-      if (_scrollController.hasClients) {
-        final viewportHeight = _scrollController.position.viewportDimension;
-        final isVertical = _readerDirection == ReaderDirection.topToBottom;
-        final scrollSize = isVertical ? viewportHeight : MediaQuery.of(context).size.width;
-        final targetOffset = index * scrollSize * 0.8;
-        if (useNoAnimation) {
-          _scrollController.jumpTo(targetOffset);
-        } else {
-          _scrollController.animateTo(
-            targetOffset,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
-        }
-      }
-    } else if (_readerMode == ReaderMode.twoPageGallery) {
-      // 双页模式：跳转到对应页面
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(index ~/ 2);
-      }
-    } else {
-      // Gallery 模式：跳转到页面
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(index);
-      }
-    }
-    
-    setState(() {
-      _currentIndex = index;
-    });
-  }
 
-  /// 显示设置面板
-  void _showSettingsPanel() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xAA000000),
-      builder: (context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.6,
-        ),
-        child: ListView(
-          children: [
-            // 阅读方向
-            ListTile(
-              leading: const Icon(Icons.swap_vert, color: Colors.white),
-              title: const Text('阅读方向', style: TextStyle(color: Colors.white)),
-              subtitle: Text(
-                _readerDirection.displayName,
-                style: const TextStyle(color: Colors.grey),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showDirectionSelector();
-              },
-            ),
-            // 全屏操作
-            ListTile(
-              leading: const Icon(Icons.touch_app, color: Colors.white),
-              title: const Text('全屏操作', style: TextStyle(color: Colors.white)),
-              subtitle: Text(
-                _getFullScreenActionName(),
-                style: const TextStyle(color: Colors.grey),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _showFullScreenActionSelector();
-              },
-            ),
-            // 双页方向（仅双页模式显示）
-            if (_readerMode == ReaderMode.twoPageGallery)
-              ListTile(
-                leading: const Icon(Icons.view_agenda, color: Colors.white),
-                title: const Text('双页方向', style: TextStyle(color: Colors.white)),
-                subtitle: Text(
-                  _twoPageDirection == TwoPageDirection.leftToRight
-                      ? '左到右'
-                      : '右到左',
-                  style: const TextStyle(color: Colors.grey),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showTwoPageDirectionSelector();
-                },
-              ),
-            // 翻页动画开关
-            ListTile(
-              leading: const Icon(Icons.animation, color: Colors.white),
-              title: const Text('翻页动画', style: TextStyle(color: Colors.white)),
-              subtitle: Text(
-                _noAnimation ? '已关闭' : '已开启',
-                style: const TextStyle(color: Colors.grey),
-              ),
-              trailing: Switch(
-                value: !_noAnimation,
-                onChanged: (value) async {
-                  final newNoAnimation = !value;
-                  setState(() {
-                    _noAnimation = newNoAnimation;
-                  });
-                  await _saveNoAnimation(newNoAnimation);
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-  
-  String _getFullScreenActionName() {
-    switch (_fullScreenAction) {
-      case FullScreenAction.touchOnce:
-        return '点击屏幕一次全屏';
-      case FullScreenAction.controller:
-        return '使用控制器全屏';
-      case FullScreenAction.touchDouble:
-        return '双击屏幕全屏';
-      case FullScreenAction.touchDoubleOnceNext:
-        return '双击全屏 + 单击下一页';
-      case FullScreenAction.threeArea:
-        return '三区域控制';
-    }
-  }
-  
-  void _showDirectionSelector() {
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('选择阅读方向'),
-        children: ReaderDirection.values.map((direction) {
-          final isSelected = direction == _readerDirection;
-          return SimpleDialogOption(
-            child: Text(
-              direction.displayName,
-              style: TextStyle(
-                color: isSelected
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-                fontWeight: isSelected ? FontWeight.bold : null,
-              ),
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              if (!isSelected) {
-                setState(() {
-                  _readerDirection = direction;
-                });
-                _saveReaderDirection(direction);
-              }
-            },
-          );
-        }).toList(),
-      ),
-    );
-  }
-  
-  void _showFullScreenActionSelector() {
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('选择全屏操作'),
-        children: FullScreenAction.values.map((action) {
-          final isSelected = action == _fullScreenAction;
-          return SimpleDialogOption(
-            child: Text(
-              _getFullScreenActionNameForAction(action),
-              style: TextStyle(
-                color: isSelected
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-                fontWeight: isSelected ? FontWeight.bold : null,
-              ),
-            ),
-            onPressed: () {
-              Navigator.pop(context);
-              if (!isSelected) {
-                setState(() {
-                  _fullScreenAction = action;
-                });
-                _saveFullScreenAction(action);
-              }
-            },
-          );
-        }).toList(),
-      ),
-    );
-  }
-  
-  String _getFullScreenActionNameForAction(FullScreenAction action) {
+  String _getFullScreenActionName(FullScreenAction action) {
     switch (action) {
       case FullScreenAction.touchOnce:
         return '点击屏幕一次全屏';
@@ -1598,35 +1140,605 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         return '三区域控制';
     }
   }
-  
-  void _showTwoPageDirectionSelector() {
-    showDialog(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('选择双页方向'),
-        children: TwoPageDirection.values.map((direction) {
-          final isSelected = direction == _twoPageDirection;
-          return SimpleDialogOption(
-            child: Text(
-              direction == TwoPageDirection.leftToRight ? '左到右' : '右到左',
-              style: TextStyle(
-                color: isSelected
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-                fontWeight: isSelected ? FontWeight.bold : null,
-              ),
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// WebToon Reader State
+
+class _WebToonReaderState extends _ImageReaderContentState {
+  var _controllerTime = DateTime.now().millisecondsSinceEpoch + 400;
+  late final List<Size?> _trueSizes = [];
+  late final ItemScrollController _itemScrollController;
+  late final ItemPositionsListener _itemPositionsListener;
+
+  @override
+  void initState() {
+    for (var e in widget.struct.images) {
+      _trueSizes.add(null);
+    }
+    _itemScrollController = ItemScrollController();
+    _itemPositionsListener = ItemPositionsListener.create();
+    _itemPositionsListener.itemPositions.addListener(_onListCurrentChange);
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _itemPositionsListener.itemPositions.removeListener(_onListCurrentChange);
+    super.dispose();
+  }
+
+  void _onListCurrentChange() {
+    var positions = _itemPositionsListener.itemPositions.value;
+    if (positions.isNotEmpty) {
+      var to = positions.first.index;
+      if (to >= 0 && to < widget.struct.images.length) {
+        super._onCurrentChange(to);
+      }
+    }
+  }
+
+  @override
+  void _needJumpTo(int index, bool animation) {
+    final time = DateTime.now().millisecondsSinceEpoch;
+    if (_controllerTime > time) {
+      return;
+    }
+    _controllerTime = time + 400;
+
+    final useAnimation = animation && !widget.noAnimation;
+    if (useAnimation) {
+      _itemScrollController.scrollTo(
+        index: index,
+        duration: const Duration(milliseconds: 300),
+      );
+    } else {
+      _itemScrollController.jumpTo(index: index);
+    }
+  }
+
+  @override
+  void _needScrollForward() {}
+
+  @override
+  void _needScrollBackward() {}
+
+  @override
+  Widget _buildViewer() {
+    return Container(
+      color: Colors.black,
+      child: _buildList(),
+    );
+  }
+
+  Widget _buildList() {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+
+        return ScrollablePositionedList.builder(
+          initialScrollIndex: super._startIndex,
+          itemScrollController: _itemScrollController,
+          itemPositionsListener: _itemPositionsListener,
+          itemCount: widget.struct.images.length + 1,
+          itemBuilder: (BuildContext context, int index) {
+            if (index >= widget.struct.images.length) {
+              return _buildNextEp();
+            }
+            return _buildImage(index, width, height);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildImage(int index, double width, double height) {
+    final picture = widget.struct.images[index];
+    // 确保尺寸值有效，防止 Matrix4 无限值错误
+    final safeWidth = width.isFinite && width > 0 ? width : 100.0;
+    final safeHeight = height.isFinite && height > 0 ? height : 100.0;
+    return CachedImageWidget(
+      imageInfo: picture.media,
+      moduleId: widget.struct.moduleId,
+      metadata: picture.metadata,
+      fit: BoxFit.fitWidth,
+      width: safeWidth,
+      placeholder: Container(
+        width: safeWidth,
+        height: safeHeight / 2,
+        color: Colors.grey[900],
+        child: const Center(
+          child: CircularProgressIndicator(),
+        ),
+      ),
+      errorWidget: Container(
+        width: safeWidth,
+        height: safeHeight / 2,
+        color: Colors.grey[900],
+        child: const Icon(Icons.broken_image, size: 60, color: Colors.grey),
+      ),
+    );
+  }
+
+  Widget _buildNextEp() {
+    if (super._fullscreenController()) {
+      return Container();
+    }
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          const Divider(),
+          const Text('本章结束', style: TextStyle(fontSize: 20)),
+          const SizedBox(height: 20),
+          if (_hasNextEp())
+            ElevatedButton(
+              onPressed: () => _onNextAction(),
+              child: const Text('下一章'),
+            )
+          else
+            const Text('已经是最后一章了'),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// WebToon Zoom Reader State
+
+class _WebToonZoomReaderState extends _WebToonReaderState {
+  @override
+  Widget _buildList() {
+    return GestureZoomBox(child: super._buildList());
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ListView Reader State (Free Zoom)
+
+class _ListViewReaderState extends _ImageReaderContentState
+    with SingleTickerProviderStateMixin {
+  final List<Size?> _trueSizes = [];
+  final _transformationController = TransformationController();
+  TapDownDetails? _doubleTapDetails;
+  late final _animationController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 100),
+  );
+  late final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    for (var e in widget.struct.images) {
+      _trueSizes.add(null);
+    }
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    _animationController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void _needJumpTo(int index, bool animation) {}
+
+  int _controllerTime = 0;
+
+  @override
+  void _needScrollForward() {
+    var first = _scrollController.offset;
+    var scrollSize = MediaQuery.of(context).size.height * 0.8;
+    var pos = first + scrollSize;
+    if (pos > _scrollController.position.maxScrollExtent) {
+      pos = _scrollController.position.maxScrollExtent;
+    }
+    if (widget.noAnimation) {
+      _scrollController.jumpTo(pos);
+    } else {
+      _scrollController.animateTo(
+        pos,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.ease,
+      );
+    }
+  }
+
+  @override
+  void _needScrollBackward() {
+    var first = _scrollController.offset;
+    var scrollSize = MediaQuery.of(context).size.height * 0.8;
+    var pos = first - scrollSize;
+    if (pos < 0) {
+      pos = 0;
+    }
+    if (widget.noAnimation) {
+      _scrollController.jumpTo(pos);
+    } else {
+      _scrollController.animateTo(
+        pos,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.ease,
+      );
+    }
+  }
+
+  @override
+  Widget _buildViewer() {
+    return Container(
+      color: Colors.black,
+      child: _buildList(),
+    );
+  }
+
+  Widget _buildList() {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        return GestureDetector(
+          onDoubleTapDown: _handleDoubleTapDown,
+          onDoubleTap: _handleDoubleTap,
+          child: InteractiveViewer(
+            transformationController: _transformationController,
+            minScale: 1.0,
+            maxScale: 4.0,
+            child: ListView.builder(
+              controller: _scrollController,
+              itemCount: widget.struct.images.length + 1,
+              itemBuilder: (context, index) {
+                if (index >= widget.struct.images.length) {
+                  return _buildNextEp();
+                }
+                return _buildImage(index, constraints.maxWidth, constraints.maxHeight);
+              },
             ),
-            onPressed: () {
-              Navigator.pop(context);
-              if (!isSelected) {
-                setState(() {
-                  _twoPageDirection = direction;
-                });
-                _saveTwoPageDirection(direction);
-              }
-            },
-          );
-        }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildImage(int index, double width, double height) {
+    final picture = widget.struct.images[index];
+    // 确保尺寸值有效，防止 Matrix4 无限值错误
+    final safeWidth = width.isFinite && width > 0 ? width : 100.0;
+    final safeHeight = height.isFinite && height > 0 ? height : 100.0;
+    return CachedImageWidget(
+      imageInfo: picture.media,
+      moduleId: widget.struct.moduleId,
+      metadata: picture.metadata,
+      fit: BoxFit.fitWidth,
+      width: safeWidth,
+      placeholder: Container(
+        width: safeWidth,
+        height: safeHeight / 2,
+        color: Colors.grey[900],
+        child: const Center(
+          child: CircularProgressIndicator(),
+        ),
+      ),
+      errorWidget: Container(
+        width: safeWidth,
+        height: safeHeight / 2,
+        color: Colors.grey[900],
+        child: const Icon(Icons.broken_image, size: 60, color: Colors.grey),
+      ),
+    );
+  }
+
+  Widget _buildNextEp() {
+    if (super._fullscreenController()) {
+      return Container();
+    }
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        children: [
+          const Divider(),
+          const Text('本章结束', style: TextStyle(fontSize: 20)),
+          const SizedBox(height: 20),
+          if (_hasNextEp())
+            ElevatedButton(
+              onPressed: () => _onNextAction(),
+              child: const Text('下一章'),
+            )
+          else
+            const Text('已经是最后一章了'),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  void _handleDoubleTapDown(TapDownDetails details) {
+    _doubleTapDetails = details;
+  }
+
+  void _handleDoubleTap() {
+    if (_animationController.isAnimating) {
+      return;
+    }
+    if (_transformationController.value != Matrix4.identity()) {
+      _transformationController.value = Matrix4.identity();
+    } else {
+      final details = _doubleTapDetails;
+      if (details != null) {
+        final position = details.localPosition;
+        if (position.dx.isFinite && position.dy.isFinite) {
+          _transformationController.value = Matrix4.identity()
+            ..translate(-position.dx, -position.dy)
+            ..scale(2.0);
+        }
+      }
+    }
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Gallery Reader State
+
+class _GalleryReaderState extends _ImageReaderContentState {
+  late PageController _pageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(initialPage: super._startIndex);
+    _preloadJump(super._startIndex, init: true);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void _needJumpTo(int index, bool animation) {
+    final useAnimation = animation && !widget.noAnimation;
+    if (useAnimation) {
+      _pageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.ease,
+      );
+    } else {
+      _pageController.jumpToPage(index);
+    }
+    _preloadJump(index);
+  }
+
+  @override
+  void _needScrollForward() {}
+
+  @override
+  void _needScrollBackward() {}
+
+  _preloadJump(int index, {bool init = false}) {
+    // 使用 CachedImageWidget 内部缓存逻辑，这里无需手动预缓存
+    return;
+  }
+
+  void _onGalleryPageChange(int to) {
+    if (to >= 0 && to < widget.struct.images.length) {
+      super._onCurrentChange(to);
+    }
+  }
+
+  @override
+  Widget _buildViewer() {
+    var gallery = PhotoViewGallery.builder(
+      scrollDirection: widget.pagerDirection == ReaderDirection.topToBottom
+          ? Axis.vertical
+          : Axis.horizontal,
+      reverse: widget.pagerDirection == ReaderDirection.rightToLeft,
+      pageController: _pageController,
+      itemCount: widget.struct.images.length,
+      builder: (BuildContext context, int index) {
+        final picture = widget.struct.images[index];
+        return PhotoViewGalleryPageOptions.customChild(
+          child: Center(
+            child: CachedImageWidget(
+              imageInfo: picture.media,
+              moduleId: widget.struct.moduleId,
+              metadata: picture.metadata,
+              fit: BoxFit.contain,
+            ),
+          ),
+          minScale: PhotoViewComputedScale.contained,
+          maxScale: PhotoViewComputedScale.covered * 3,
+        );
+      },
+      onPageChanged: _onGalleryPageChange,
+      backgroundDecoration: const BoxDecoration(color: Colors.black),
+    );
+
+    return Stack(
+      children: [
+        gallery,
+        _buildNextEpController(),
+      ],
+    );
+  }
+
+  Widget _buildNextEpController() {
+    if (super._fullscreenController() ||
+        _current < widget.struct.images.length - 1) {
+      return Container();
+    }
+    return Align(
+      alignment: Alignment.bottomRight,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          margin: const EdgeInsets.all(20),
+          child: ElevatedButton(
+            onPressed: _onNextAction,
+            child: const Text('下一章'),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Two Page Gallery Reader State
+
+class _TwoPageGalleryReaderState extends _ImageReaderContentState {
+  late PageController _pageController;
+  var _controllerTime = DateTime.now().millisecondsSinceEpoch + 400;
+  late final List<Size?> _trueSizes = [];
+  List<ImageProvider> ips = [];
+  List<PhotoViewGalleryPageOptions> options = [];
+
+  @override
+  void initState() {
+    for (var e in widget.struct.images) {
+      _trueSizes.add(null);
+    }
+    super.initState();
+    _pageController = PageController(initialPage: super._startIndex ~/ 2);
+    for (var index = 0; index < widget.struct.images.length; index++) {
+      final picture = widget.struct.images[index];
+      final url = getImageUrl(picture.media);
+      ips.add(NetworkImage(url));
+    }
+
+    // 创建双页选项
+    for (var index = 0; index < ips.length; index += 2) {
+      if (index + 1 < ips.length) {
+        // 双页
+        options.add(
+          PhotoViewGalleryPageOptions.customChild(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: PhotoView(
+                    imageProvider: ips[index],
+                    backgroundDecoration: const BoxDecoration(color: Colors.black),
+                    minScale: PhotoViewComputedScale.contained,
+                    maxScale: PhotoViewComputedScale.covered * 2,
+                    tightMode: true,
+                  ),
+                ),
+                Expanded(
+                  child: PhotoView(
+                    imageProvider: ips[index + 1],
+                    backgroundDecoration: const BoxDecoration(color: Colors.black),
+                    minScale: PhotoViewComputedScale.contained,
+                    maxScale: PhotoViewComputedScale.covered * 2,
+                    tightMode: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      } else {
+        // 单页
+        options.add(
+          PhotoViewGalleryPageOptions(
+            imageProvider: ips[index],
+            minScale: PhotoViewComputedScale.contained,
+            maxScale: PhotoViewComputedScale.covered * 3,
+          ),
+        );
+      }
+    }
+
+    _preloadJump(super._startIndex, init: true);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void _needJumpTo(int index, bool animation) {
+    final pageIndex = index ~/ 2;
+    final useAnimation = animation && !widget.noAnimation;
+    if (useAnimation) {
+      _pageController.animateToPage(
+        pageIndex,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.ease,
+      );
+    } else {
+      _pageController.jumpToPage(pageIndex);
+    }
+    _preloadJump(index);
+  }
+
+  @override
+  void _needScrollBackward() {}
+
+  @override
+  void _needScrollForward() {}
+
+  _preloadJump(int index, {bool init = false}) {
+    fn() {
+      for (var i = index; i < index + 4 && i < ips.length; i++) {
+        precacheImage(ips[i], context);
+      }
+    }
+
+    if (init) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => fn());
+    } else {
+      fn();
+    }
+  }
+
+  @override
+  Widget _buildViewer() {
+    return Stack(
+      children: [
+        PhotoViewGallery(
+          pageOptions: options,
+          pageController: _pageController,
+          onPageChanged: _onGalleryPageChange,
+          backgroundDecoration: const BoxDecoration(color: Colors.black),
+        ),
+        _buildNextEpController(),
+      ],
+    );
+  }
+
+  void _onGalleryPageChange(int to) {
+    var toIndex = to * 2;
+    for (var i = toIndex + 2; i < toIndex + 5 && i < ips.length; i++) {
+      precacheImage(ips[i], context);
+    }
+    if (to >= 0 && to < widget.struct.images.length) {
+      super._onCurrentChange(toIndex);
+    }
+  }
+
+  Widget _buildNextEpController() {
+    if (super._fullscreenController() ||
+        _current < widget.struct.images.length - 2) {
+      return Container();
+    }
+    return Align(
+      alignment: Alignment.bottomRight,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          margin: const EdgeInsets.all(20),
+          child: ElevatedButton(
+            onPressed: _onNextAction,
+            child: const Text('下一章'),
+          ),
+        ),
       ),
     );
   }
