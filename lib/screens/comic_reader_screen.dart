@@ -1406,7 +1406,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                           setState(() {
                             _sliderDragging = false;
                           });
-                          _jumpToIndex(value.round());
+                          _jumpToIndex(value.round(), forceNoAnimation: true);
                         },
                       ),
                     ),
@@ -1512,7 +1512,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
                   setState(() {
                     _sliderDragging = false;
                   });
-                  _jumpToIndex(value.round());
+                  _jumpToIndex(value.round(), forceNoAnimation: true);
                 },
               ),
             ),
@@ -1523,8 +1523,10 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
   }
 
   /// 跳转到指定索引
-  void _jumpToIndex(int index) {
+  void _jumpToIndex(int index, {bool forceNoAnimation = false}) {
     if (index < 0 || index >= _pictures.length) return;
+    
+    final useNoAnimation = forceNoAnimation || _noAnimation;
     
     if (_readerMode == ReaderMode.webtoon || 
         _readerMode == ReaderMode.webtoonZoom ||
@@ -1535,7 +1537,7 @@ class _ComicReaderScreenState extends State<ComicReaderScreen> {
         final isVertical = _readerDirection == ReaderDirection.topToBottom;
         final scrollSize = isVertical ? viewportHeight : MediaQuery.of(context).size.width;
         final targetOffset = index * scrollSize * 0.8;
-        if (_noAnimation) {
+        if (useNoAnimation) {
           _scrollController.jumpTo(targetOffset);
         } else {
           _scrollController.animateTo(
