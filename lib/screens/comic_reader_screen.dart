@@ -739,6 +739,10 @@ abstract class _ImageReaderContentState extends State<_ImageReaderContent> {
     if (widget.struct.fullScreen) {
       return const SizedBox.shrink();
     }
+    // Hide slider if no images
+    if (widget.struct.images.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return Container(
       height: 45,
       color: const Color(0x88000000),
@@ -766,10 +770,15 @@ abstract class _ImageReaderContentState extends State<_ImageReaderContent> {
 
 
   Widget _buildSliderWidget() {
+    // Ensure min <= max: if no images, set both to 0
+    final imageCount = widget.struct.images.length;
+    final maxValue = imageCount > 0 ? (imageCount - 1).toDouble() : 0.0;
+    final sliderValue = imageCount > 0 ? _slider.toDouble().clamp(0.0, maxValue) : 0.0;
+    
     return Slider(
       min: 0,
-      max: (widget.struct.images.length - 1).toDouble(),
-      value: _slider.toDouble(),
+      max: maxValue,
+      value: sliderValue,
       onChangeStart: (value) {
         setState(() {
           _sliderDragging = true;

@@ -179,31 +179,31 @@ class RustBuilder {
       );
     } else {
       // Non-Android builds use regular cargo
-      runCommand(
-        'rustup',
-        [
-          'run',
-          _toolchain,
-          'cargo',
-          'build',
-          ...extraArgs,
-          '--manifest-path',
-          manifestPath,
-          '-p',
-          environment.crateInfo.packageName,
-          if (!environment.configuration.isDebug) '--release',
-          '--target',
-          target.rust,
-          '--target-dir',
-          environment.targetTempDir,
-        ],
-        environment: await _buildEnvironment(),
-      );
-      return path.join(
-        environment.targetTempDir,
+    runCommand(
+      'rustup',
+      [
+        'run',
+        _toolchain,
+        'cargo',
+        'build',
+        ...extraArgs,
+        '--manifest-path',
+        manifestPath,
+        '-p',
+        environment.crateInfo.packageName,
+        if (!environment.configuration.isDebug) '--release',
+        '--target',
         target.rust,
-        environment.configuration.rustName,
-      );
+        '--target-dir',
+        environment.targetTempDir,
+      ],
+      environment: await _buildEnvironment(),
+    );
+    return path.join(
+      environment.targetTempDir,
+      target.rust,
+      environment.configuration.rustName,
+    );
     }
   }
 

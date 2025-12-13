@@ -64,7 +64,67 @@ impl ModuleLoader {
     }
 
     fn extract_field(&self, script: &str, field: &str) -> Result<String> {
-        // 简单的字段提取，查找 field: "value" 或 field: 'value'
+        // 首先找到 moduleInfo 对象的范围
+        let module_info_start = script.find("moduleInfo")
+            .or_else(|| script.find("module.info"))
+            .ok_or_else(|| anyhow::anyhow!("moduleInfo not found"))?;
+        
+        // 从 moduleInfo 开始查找对象定义的开始位置
+        let obj_start = script[module_info_start..]
+            .find('{')
+            .map(|pos| module_info_start + pos)
+            .ok_or_else(|| anyhow::anyhow!("moduleInfo object not found"))?;
+        
+        // 找到匹配的闭合大括号（处理嵌套对象）
+        let mut depth = 0;
+        let mut obj_end = obj_start + 1;
+        let mut in_string = false;
+        let mut string_char = '\0';
+        
+        for (i, ch) in script[obj_start + 1..].char_indices() {
+            let pos = obj_start + 1 + i;
+            let ch_str = ch.to_string();
+            
+            if !in_string {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        if depth == 0 {
+                            obj_end = pos + 1;
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    '"' | '\'' => {
+                        in_string = true;
+                        string_char = ch;
+                    }
+                    _ => {}
+                }
+            } else if ch == string_char && script.as_bytes().get(pos.saturating_sub(1)) != Some(&b'\\') {
+                in_string = false;
+            }
+        }
+        
+        // 只在 moduleInfo 对象范围内搜索字段
+        let module_info_obj = &script[obj_start..obj_end];
+        
+        // 匹配字段，支持多行
+        let patterns = [
+            format!(r#"(?m){}:\s*["']([^"']+)["']"#, field),
+            format!(r#"(?m)"{}":\s*["']([^"']+)["']"#, field),
+        ];
+        
+        for pattern in &patterns {
+            let re = regex::Regex::new(pattern)?;
+            if let Some(captures) = re.captures(module_info_obj) {
+                if let Some(value) = captures.get(1) {
+                    return Ok(value.as_str().to_string());
+                }
+            }
+        }
+        
+        // 如果没找到，回退到简单匹配（向后兼容）
         let patterns = [
             format!(r#"{}:\s*["']([^"']+)["']"#, field),
             format!(r#""{}":\s*["']([^"']+)["']"#, field),

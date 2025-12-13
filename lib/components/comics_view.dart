@@ -3,6 +3,7 @@ import 'package:comics/src/rust/api/module_api.dart';
 import 'package:comics/src/rust/modules/types.dart';
 import 'package:comics/screens/comic_info_screen.dart';
 import 'package:comics/components/comic_card.dart';
+import 'package:comics/components/error_view.dart';
 
 /// 从 RemoteImageInfo 获取完整图片 URL
 String getImageUrl(RemoteImageInfo info) {
@@ -194,29 +195,9 @@ class _ComicsViewState extends State<ComicsView> {
   @override
   Widget build(BuildContext context) {
     if (_error != null && _comics.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.red),
-            const SizedBox(height: 16),
-            Text('加载失败', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _refresh,
-              child: const Text('重试'),
-            ),
-          ],
-        ),
+      return ErrorView(
+        error: _error!,
+        onRetry: _refresh,
       );
     }
 

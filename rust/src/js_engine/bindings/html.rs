@@ -98,6 +98,75 @@ pub fn register(ctx: &Ctx<'_>) -> Result<()> {
     
     globals.set("__html__", html_obj)?;
     
+    // 创建 Document 类的 JavaScript 实现
+    // 这个类包装了 HTML 字符串，提供 querySelector/querySelectorAll 方法
+    let document_class_code = r#"
+        class Document {
+            constructor(htmlStr) {
+                this._html = htmlStr;
+            }
+            
+            querySelector(selector) {
+                var result = __html__.selectOne(this._html, selector);
+                if (result === "null" || result === null) return null;
+                var elem = JSON.parse(result);
+                return new Element(elem, this._html, selector);
+            }
+            
+            querySelectorAll(selector) {
+                var results = JSON.parse(__html__.select(this._html, selector));
+                var elements = [];
+                if (Array.isArray(results)) {
+                    for (var i = 0; i < results.length; i++) {
+                        elements.push(new Element(results[i], this._html, selector));
+                    }
+                }
+                return elements;
+            }
+        }
+        
+        class Element {
+            constructor(data, parentHtml, selector) {
+                this._data = data;
+                this._parentHtml = parentHtml;
+                this._selector = selector;
+            }
+            
+            getAttribute(name) {
+                return this._data.attrs && this._data.attrs[name] ? this._data.attrs[name] : null;
+            }
+            
+            get textContent() {
+                return this._data.text || "";
+            }
+            
+            querySelector(selector) {
+                var result = __html__.selectOne(this._data.html, selector);
+                if (result === "null" || result === null) return null;
+                var elem = JSON.parse(result);
+                return new Element(elem, this._data.html, selector);
+            }
+            
+            querySelectorAll(selector) {
+                var results = JSON.parse(__html__.select(this._data.html, selector));
+                var elements = [];
+                if (Array.isArray(results)) {
+                    for (var i = 0; i < results.length; i++) {
+                        elements.push(new Element(results[i], this._data.html, selector));
+                    }
+                }
+                return elements;
+            }
+        }
+        
+        // 添加 html.parse 方法，返回 Document 对象
+        __html__.parse = function(htmlStr) {
+            return new Document(htmlStr);
+        };
+    "#;
+    
+    ctx.eval::<rquickjs::Value, _>(document_class_code)?;
+    
     tracing::debug!("[JS HTML] HTML bindings registered");
     
     Ok(())

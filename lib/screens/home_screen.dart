@@ -522,6 +522,10 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _importModuleFromFile,
             child: const Text('导入 JS 文件'),
           ),
+          TextButton(
+            onPressed: _importModuleFromUrl,
+            child: const Text('从 URL 导入插件'),
+          ),
         ],
       ),
     );

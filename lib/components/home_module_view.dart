@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:comics/src/rust/api/module_api.dart';
 import 'package:comics/src/rust/modules/types.dart';
 import 'package:comics/components/comics_view.dart';
+import 'package:comics/components/error_view.dart';
 
 /// 嵌入式模块浏览视图（带分类选择）
 class HomeModuleView extends StatefulWidget {
@@ -176,29 +177,9 @@ class _HomeModuleViewState extends State<HomeModuleView> {
     }
 
     if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.red),
-            const SizedBox(height: 16),
-            Text('加载失败', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                _error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadCategories,
-              child: const Text('重试'),
-            ),
-          ],
-        ),
+      return ErrorView(
+        error: _error!,
+        onRetry: _loadCategories,
       );
     }
 
