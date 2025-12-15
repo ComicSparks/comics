@@ -5,6 +5,56 @@ use anyhow::Result;
 
 use super::bindings;
 
+/// 截断 JSON 字符串中的 imageData 字段，保留其他字段完整
+fn truncate_image_data_in_json(json_str: &str) -> String {
+    // 使用正则表达式或简单字符串处理来截断 imageData 值
+    // 查找 "imageData":"..." 或 "imageData":\"...\"
+    if let Some(start) = json_str.find("\"imageData\"") {
+        // 找到 imageData 字段开始位置
+        if let Some(colon_pos) = json_str[start..].find(':') {
+            let value_start = start + colon_pos + 1;
+            // 跳过空格和引号
+            let mut quote_pos = value_start;
+            while quote_pos < json_str.len() && (json_str.chars().nth(quote_pos - start + start) == Some(' ') || json_str.chars().nth(quote_pos - start + start) == Some('\\')) {
+                quote_pos += 1;
+            }
+            
+            // 找到值的引号位置
+            if let Some(quote_idx) = json_str[value_start..].find('"') {
+                let data_start = value_start + quote_idx + 1;
+                // 保留前100个字符
+                let preview_len = 100.min(json_str.len() - data_start);
+                let preview = &json_str[data_start..data_start + preview_len];
+                
+                // 找到 imageData 值结束的引号（考虑转义）
+                let mut end_pos = data_start;
+                let mut found_end = false;
+                for (i, ch) in json_str[data_start..].char_indices() {
+                    if ch == '"' && (i == 0 || json_str.chars().nth(data_start + i - 1) != Some('\\')) {
+                        end_pos = data_start + i;
+                        found_end = true;
+                        break;
+                    }
+                }
+                
+                if found_end {
+                    let original_len = end_pos - data_start;
+                    // 构建新的 JSON 字符串
+                    let mut result = String::new();
+                    result.push_str(&json_str[..data_start]);
+                    result.push_str(preview);
+                    result.push_str(&format!("...<truncated {} bytes>", original_len - preview_len));
+                    result.push_str(&json_str[end_pos..]);
+                    return result;
+                }
+            }
+        }
+    }
+    
+    // 如果处理失败，返回原字符串
+    json_str.to_string()
+}
+
 /// JavaScript 运行时封装
 pub struct JsRuntime {
     runtime: Runtime,
@@ -159,7 +209,13 @@ impl JsRuntime {
             let parse: Function = json.get("parse")?;
             let args: Value = parse.call((args_json,))?;
             
-            tracing::info!("[JS Runtime] Calling function {} with args: {}", func_name, args_json);
+            // 如果参数包含 imageData，只缩减 imageData 字段以避免日志过大
+            let log_args = if args_json.contains("\"imageData\"") {
+                truncate_image_data_in_json(args_json)
+            } else {
+                args_json.to_string()
+            };
+            tracing::info!("[JS Runtime] Calling function {} with args: {}", func_name, log_args);
             tracing::debug!("Parsed args, calling function...");
             
             // 调用函数
@@ -230,7 +286,13 @@ impl JsRuntime {
             let stringify: Function = json.get("stringify")?;
             let json_str: String = stringify.call((final_value,))?;
             
-            tracing::debug!("Serialized result: {} bytes", json_str.len());
+            // 如果结果包含 imageData，只缩减 imageData 字段以避免日志过大
+            if json_str.contains("\"imageData\"") {
+                let log_result = truncate_image_data_in_json(&json_str);
+                tracing::debug!("Serialized result: {} bytes, preview: {}", json_str.len(), log_result);
+            } else {
+                tracing::debug!("Serialized result: {} bytes", json_str.len());
+            }
             
             Ok(json_str)
         })

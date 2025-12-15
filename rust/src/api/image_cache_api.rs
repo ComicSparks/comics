@@ -239,6 +239,12 @@ pub async fn process_image_with_module(
     image_data_base64: String,
     params_json: String,
 ) -> anyhow::Result<String> {
+    // 截断 imageData 日志以避免过大
+    let log_image_data = if image_data_base64.len() > 100 {
+        format!("{}... ({} bytes)", &image_data_base64[..100], image_data_base64.len())
+    } else {
+        image_data_base64.clone()
+    };
     tracing::info!("[Image Process] Processing image for module: {}, image size: {} bytes, params: {}", 
         module_id, 
         image_data_base64.len(),

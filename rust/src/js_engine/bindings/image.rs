@@ -33,6 +33,29 @@ pub fn register(ctx: &Ctx<'_>) -> Result<()> {
         }
     })?)?;
     
+    // image.crop(imageDataBase64, x, y, width, height) -> base64 encoded PNG
+    image_obj.set("crop", Function::new(ctx.clone(), |image_data_base64: String, x: u32, y: u32, width: u32, height: u32| -> String {
+        match image_api::crop_image(image_data_base64, x, y, width, height) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("[JS Image] Failed to crop image: {}", e);
+                String::new()
+            }
+        }
+    })?)?;
+    
+    // image.composeVertical(imageDataBase64List) -> base64 encoded PNG
+    // imageDataBase64List should be a JSON array string
+    image_obj.set("composeVertical", Function::new(ctx.clone(), |image_data_base64_list: String| -> String {
+        match image_api::compose_vertical(image_data_base64_list) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("[JS Image] Failed to compose images vertically: {}", e);
+                String::new()
+            }
+        }
+    })?)?;
+    
     globals.set("__image__", image_obj)?;
     
     Ok(())

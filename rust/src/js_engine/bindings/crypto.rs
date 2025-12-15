@@ -14,6 +14,12 @@ pub fn register(ctx: &Ctx<'_>) -> Result<()> {
         crypto::md5_string(&data)
     })?)?;
     
+    // crypto.md5Bytes(data) -> string (hex encoded MD5 hash of the string bytes)
+    // This function treats the input string as raw bytes and computes MD5
+    crypto_obj.set("md5Bytes", Function::new(ctx.clone(), |data: String| -> String {
+        crypto::md5_hash(data.as_bytes())
+    })?)?;
+    
     // crypto.sha256(data) -> string
     crypto_obj.set("sha256", Function::new(ctx.clone(), |data: String| -> String {
         crypto::sha256_string(&data)

@@ -372,7 +372,13 @@ impl ModuleManager {
 
     /// 调用模块函数
     pub async fn call_function(&self, module_id: &str, func_name: &str, args_json: &str) -> Result<String> {
-        tracing::debug!("call_function: module={}, func={}, args={}", module_id, func_name, args_json);
+        // 如果参数包含 imageData，只显示部分内容以避免日志过大
+        let log_args = if args_json.contains("imageData") && args_json.len() > 200 {
+            format!("{}... ({} bytes, contains imageData)", &args_json[..200.min(args_json.len())], args_json.len())
+        } else {
+            args_json.to_string()
+        };
+        tracing::debug!("call_function: module={}, func={}, args={}", module_id, func_name, log_args);
         
         // 确保模块已加载
         self.load_module(module_id).await?;
